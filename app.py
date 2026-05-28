@@ -20,6 +20,40 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── Password Gate ──
+APP_PASSWORD = st.secrets.get("APP_PASSWORD", "atrian2025")
+
+
+def check_password():
+    """Ecrã de login simples com password partilhada."""
+    if st.session_state.get("authenticated"):
+        return True
+
+    st.markdown(
+        """
+        <div style="display:flex; flex-direction:column; align-items:center;
+                    justify-content:center; padding-top:8rem;">
+            <p style="font-size:3rem; margin-bottom:0;">🚛</p>
+            <h2 style="margin-bottom:0.2rem;">Roteador Atrian Norte</h2>
+            <p style="color:#888;">Introduz a password para aceder</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col1, col2, col3 = st.columns([1, 1.5, 1])
+    with col2:
+        pwd = st.text_input("Password", type="password", label_visibility="collapsed",
+                            placeholder="Password")
+        if st.button("Entrar", type="primary", use_container_width=True):
+            if pwd == APP_PASSWORD:
+                st.session_state["authenticated"] = True
+                st.rerun()
+            else:
+                st.error("Password incorreta.")
+    return False
+
+
 # ── CSS ──
 st.markdown("""
 <style>
@@ -90,6 +124,9 @@ def format_hours(h):
 
 
 def main():
+    if not check_password():
+        return
+
     config = load_config()
 
     # ── Header ──
