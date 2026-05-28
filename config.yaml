@@ -46,8 +46,12 @@ fuel:
   price_per_liter: 1.65
   consumption_per_100km: 7.0     # litros/100km
 
-# Fator de correcao estrada (haversine → distancia real)
+# Fator de correcao estrada (haversine → distancia real) — so usado se OSRM indisponivel
 road_factor: 1.35
+
+# Fator de transito (%) — ajuste global nos tempos de viagem
+# 0 = sem ajuste, 20 = +20% tempo (transito moderado), -10 = condicoes ideais
+traffic_factor: 0
 
 # Velocidades medias (km/h)
 speed:

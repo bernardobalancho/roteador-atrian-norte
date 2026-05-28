@@ -300,21 +300,22 @@ def assign_stops_to_vehicles(stops, vehicles, config, weekday):
                 least = min(assignments, key=lambda p: _vehicle_load(p))
                 assignments[least].extend(zstops[chunk_idx:])
 
-    # Reequilibrar por horas estimadas
+    # Reequilibrar agressivamente com apenas 4 viaturas
+    # Varias rondas para tentar encaixar tudo sem o Tiago
+    _rebalance_by_hours(assignments, non_tiago, config, max_hours)
     _rebalance_by_hours(assignments, non_tiago, config, max_hours)
 
-    # Verificar se precisamos do Tiago
-    # Usa 85% do max como threshold porque a estimativa e optimista
-    tiago_needed = False
+    # Verificar se ALGUMA viatura excede o limite de horas
     depot_lat = config['depot']['lat']
     depot_lon = config['depot']['lon']
-    tiago_threshold = max_hours * 0.85
+
+    tiago_needed = False
     if tiago:
         for plate, assigned in assignments.items():
             if not assigned:
                 continue
             est_hours = _estimate_route_hours(assigned, depot_lat, depot_lon, config)
-            if est_hours > tiago_threshold:
+            if est_hours > max_hours:
                 tiago_needed = True
                 break
 
@@ -326,6 +327,7 @@ def assign_stops_to_vehicles(stops, vehicles, config, weekday):
         assignments[tiago.plate] = []
         _redistribute_with_tiago(assignments, non_tiago, tiago, config, max_hours)
     elif tiago:
+        # Tiago nao sai — apenas apoia o motorista mais carregado
         max_hours_plate = None
         max_h = 0
         for plate, assigned in assignments.items():
@@ -351,9 +353,8 @@ def _estimate_route_hours(stops, depot_lat, depot_lon, config):
     total_min += load_min
 
     rf = config.get('road_factor', 1.35)
-    is_reduced = False
-    for day in config['work_hours'].get('reduced_days', []):
-        pass
+    traffic = config.get('traffic_factor', 0.0)  # percentagem extra de transito
+
     wh = config['work_hours']['normal']
     start_h, start_m = map(int, wh['start'].split(':'))
     start_minutes = start_h * 60 + start_m
@@ -373,6 +374,8 @@ def _estimate_route_hours(stops, depot_lat, depot_lon, config):
                 best_i = i
         stop = remaining.pop(best_i)
         travel = estimate_travel_minutes(best_dist, cur_lat, cur_lon, stop.lat, stop.lon, config)
+        # Aplicar fator de transito
+        travel *= (1 + traffic / 100)
         arrival = current_clock + travel
         # Wait for time window
         if stop.time_window_start and arrival < stop.time_window_start:
@@ -384,6 +387,7 @@ def _estimate_route_hours(stops, depot_lat, depot_lon, config):
     # Return trip to depot
     d = estimate_distance_km(cur_lat, cur_lon, depot_lat, depot_lon, rf)
     travel = estimate_travel_minutes(d, cur_lat, cur_lon, depot_lat, depot_lon, config)
+    travel *= (1 + traffic / 100)
     total_min += travel
 
     return total_min / 60
@@ -674,6 +678,7 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
     rf = config.get('road_factor', 1.35)
     porto_red = config.get('porto_time_reduction', 0.10)
     tiago_red = config.get('tiago_support_reduction', 0.10)
+    traffic = config.get('traffic_factor', 0.0)  # percentagem extra de transito
 
     assigned_stops = []
     current_time = departure_minutes
@@ -686,6 +691,8 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
     for i, stop in enumerate(ordered_stops):
         dist = estimate_distance_km(current_lat, current_lon, stop.lat, stop.lon, rf)
         travel = estimate_travel_minutes(dist, current_lat, current_lon, stop.lat, stop.lon, config)
+        # Aplicar fator de transito
+        travel *= (1 + traffic / 100)
         total_km += dist
 
         arrival_time = current_time + travel
@@ -725,6 +732,7 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
                                       vehicle.home_lat, vehicle.home_lon, rf)
     home_travel = estimate_travel_minutes(home_dist, current_lat, current_lon,
                                            vehicle.home_lat, vehicle.home_lon, config)
+    home_travel *= (1 + traffic / 100)
     total_km += home_dist
     arrival_home = last_departure + home_travel
     total_hours = (arrival_home - start_minutes) / 60
@@ -850,6 +858,7 @@ def _enforce_time_windows(stops, depot_lat, depot_lon, config, weekday):
     current_time = departure
     cur_lat, cur_lon = depot_lat, depot_lon
     rf = config.get('road_factor', 1.35)
+    traffic = config.get('traffic_factor', 0.0)
 
     all_remaining = list(stops)
 
@@ -860,6 +869,7 @@ def _enforce_time_windows(stops, depot_lat, depot_lon, config, weekday):
         for s in all_remaining:
             dist = estimate_distance_km(cur_lat, cur_lon, s.lat, s.lon, rf)
             travel = estimate_travel_minutes(dist, cur_lat, cur_lon, s.lat, s.lon, config)
+            travel *= (1 + traffic / 100)
             arrival = current_time + travel
 
             # Penalizar se chegamos depois da janela fechar
@@ -883,6 +893,7 @@ def _enforce_time_windows(stops, depot_lat, depot_lon, config, weekday):
             all_remaining.remove(best)
             dist = estimate_distance_km(cur_lat, cur_lon, best.lat, best.lon, rf)
             travel = estimate_travel_minutes(dist, cur_lat, cur_lon, best.lat, best.lon, config)
+            travel *= (1 + traffic / 100)
             arrival = current_time + travel
             if best.time_window_start and arrival < best.time_window_start:
                 arrival = best.time_window_start

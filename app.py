@@ -165,8 +165,17 @@ def main():
             road_factor = st.slider("Fator estrada (haversine→real)", 1.1, 1.8, config.get('road_factor', 1.35), 0.05)
         else:
             road_factor = config.get('road_factor', 1.35)
-            st.caption("🛰️ Distâncias reais via OSRM (fator estrada não aplicável)")
-        porto_reduction = st.slider("Redução Porto (%)", 0, 30, int(config.get('porto_time_reduction', 0.10) * 100))
+            st.caption("🛰️ Distâncias reais via OSRM")
+        traffic_factor = st.slider(
+            "Fator trânsito (%)",
+            min_value=-20, max_value=50, value=0, step=5,
+            help="Ajuste global nos tempos de viagem. 0% = sem ajuste, +20% = trânsito moderado, -10% = condições ideais"
+        )
+        porto_reduction = st.slider(
+            "Ajuste Porto (%)",
+            min_value=-30, max_value=30, value=int(config.get('porto_time_reduction', 0.10) * 100), step=5,
+            help="Positivo = menos tempo no Porto (descarga rápida), Negativo = mais tempo (trânsito, dificuldade estacionar)"
+        )
 
     # Apply sidebar changes to config
     for v in config['fleet']:
@@ -176,6 +185,7 @@ def main():
     config['work_hours']['normal']['max_hours'] = max_hours_normal
     config['work_hours']['reduced']['max_hours'] = max_hours_reduced
     config['road_factor'] = road_factor
+    config['traffic_factor'] = traffic_factor
     config['porto_time_reduction'] = porto_reduction / 100
 
     # ── Main content ──
