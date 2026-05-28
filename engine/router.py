@@ -17,7 +17,8 @@ from collections import defaultdict
 from ortools.constraint_solver import routing_enums_pb2, pywrapcp
 
 from .models import PickingLine, Stop, Vehicle, AssignedStop, RoutePlan
-from .geo import geocode_postal, estimate_distance_km, estimate_travel_minutes
+from .geo import (geocode_postal, estimate_distance_km, estimate_travel_minutes,
+                   osrm_table, _check_osrm)
 
 
 def _parse_time(text):
@@ -530,6 +531,7 @@ def sequence_stops(stops, depot_lat, depot_lon, home_lat, home_lon, config):
     """
     Usa OR-Tools para encontrar a melhor ordem de visita.
     Resolve um TSP (Travelling Salesman Problem) com janelas horarias.
+    Usa OSRM Table API para obter a matriz de distancias/tempos reais.
     """
     if len(stops) == 0:
         return []
@@ -539,28 +541,38 @@ def sequence_stops(stops, depot_lat, depot_lon, home_lat, home_lon, config):
     n = len(stops) + 1  # +1 para o deposito
     rf = config.get('road_factor', 1.35)
 
-    # Matriz de distancias (em metros, OR-Tools usa inteiros)
-    dist_matrix = [[0] * n for _ in range(n)]
-    time_matrix = [[0] * n for _ in range(n)]
-
     all_points = [(depot_lat, depot_lon)] + [(s.lat, s.lon) for s in stops]
 
-    for i in range(n):
-        for j in range(n):
-            if i == j:
-                continue
-            d = estimate_distance_km(
-                all_points[i][0], all_points[i][1],
-                all_points[j][0], all_points[j][1], rf
-            )
-            t = estimate_travel_minutes(
-                d,
-                all_points[i][0], all_points[i][1],
-                all_points[j][0], all_points[j][1],
-                config
-            )
-            dist_matrix[i][j] = int(d * 1000)  # metros
-            time_matrix[i][j] = int(t)          # minutos
+    # Tentar OSRM Table API (uma chamada para toda a matriz)
+    osrm_result = None
+    if _check_osrm():
+        osrm_result = osrm_table(all_points)
+
+    if osrm_result:
+        # Usar distancias e tempos reais
+        dist_km_matrix, time_min_matrix = osrm_result
+        dist_matrix = [[int(dist_km_matrix[i][j] * 1000) for j in range(n)] for i in range(n)]
+        time_matrix = [[int(time_min_matrix[i][j]) for j in range(n)] for i in range(n)]
+    else:
+        # Fallback: haversine × road_factor
+        dist_matrix = [[0] * n for _ in range(n)]
+        time_matrix = [[0] * n for _ in range(n)]
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                d = estimate_distance_km(
+                    all_points[i][0], all_points[i][1],
+                    all_points[j][0], all_points[j][1], rf
+                )
+                t = estimate_travel_minutes(
+                    d,
+                    all_points[i][0], all_points[i][1],
+                    all_points[j][0], all_points[j][1],
+                    config
+                )
+                dist_matrix[i][j] = int(d * 1000)  # metros
+                time_matrix[i][j] = int(t)          # minutos
 
     # Adicionar tempo de descarga ao tempo de viagem
     for j in range(1, n):
@@ -748,6 +760,12 @@ def route(lines, config, expedition_date):
     weekday = expedition_date.weekday()
     day_names = ['segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado', 'domingo']
     print(f"  Data: {expedition_date.strftime('%d/%m/%Y')} ({day_names[weekday]})")
+
+    # 0. Verificar OSRM
+    if _check_osrm():
+        print(f"  🛰️ OSRM: disponivel — a usar distancias reais pela estrada")
+    else:
+        print(f"  ⚠️ OSRM: indisponivel — a usar haversine × road_factor como fallback")
 
     # 1. Construir paragens
     stops = build_stops(lines, config)

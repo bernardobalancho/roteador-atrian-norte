@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from engine.loader import load_picking_map, load_criteria
 from engine.router import route
 from engine.writer import write_routed_map, write_pre_carga
+from engine.geo import _check_osrm
 
 
 st.set_page_config(
@@ -133,6 +134,12 @@ def main():
     st.markdown('<p class="main-title">🚛 Roteador Atrian Norte</p>', unsafe_allow_html=True)
     st.markdown('<p class="sub-title">Planeamento de rotas diário — zona Norte de Portugal</p>', unsafe_allow_html=True)
 
+    # ── OSRM status ──
+    if _check_osrm():
+        st.success("🛰️ OSRM ativo — distâncias e tempos reais pela estrada")
+    else:
+        st.warning("⚠️ OSRM indisponível — a usar estimativa haversine como fallback")
+
     # ── Sidebar: configuração ──
     with st.sidebar:
         st.header("⚙️ Configuração")
@@ -154,7 +161,11 @@ def main():
 
         st.divider()
         st.subheader("Parâmetros")
-        road_factor = st.slider("Fator estrada (haversine→real)", 1.1, 1.8, config.get('road_factor', 1.35), 0.05)
+        if not _check_osrm():
+            road_factor = st.slider("Fator estrada (haversine→real)", 1.1, 1.8, config.get('road_factor', 1.35), 0.05)
+        else:
+            road_factor = config.get('road_factor', 1.35)
+            st.caption("🛰️ Distâncias reais via OSRM (fator estrada não aplicável)")
         porto_reduction = st.slider("Redução Porto (%)", 0, 30, int(config.get('porto_time_reduction', 0.10) * 100))
 
     # Apply sidebar changes to config

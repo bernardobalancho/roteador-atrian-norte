@@ -2,3 +2,4 @@ streamlit>=1.30
 openpyxl>=3.1
 ortools>=9.8
 pyyaml>=6.0
+requests>=2.28

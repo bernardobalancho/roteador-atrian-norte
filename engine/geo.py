@@ -1,16 +1,138 @@
 """
 Geocodificacao por codigo postal e calculo de distancias.
 
-Usa uma tabela de coordenadas aproximadas para os codigos postais
-da zona Norte de Portugal. A distancia real e estimada como:
-   haversine × road_factor
+Usa OSRM (Open Source Routing Machine) para distancias e tempos REAIS
+pela estrada, com fallback para haversine se a API nao estiver disponivel.
 
-Mais tarde pode ser substituido por Google Maps, OSRM, etc.
+OSRM usa dados OpenStreetMap — gratuito e sem limite de pedidos.
 """
 import math
+import requests
+import time as _time
+from functools import lru_cache
 
-# Coordenadas aproximadas por prefixo de codigo postal (4 digitos).
-# Fonte: centroide aproximado de cada area postal.
+# ── OSRM Config ──
+OSRM_BASE = "https://router.project-osrm.org"
+OSRM_TIMEOUT = 10  # segundos por request
+OSRM_MAX_TABLE_SIZE = 80  # max pontos por pedido table
+_osrm_available = None  # None = nao testado, True/False
+
+# Cache para evitar repetir pedidos (pares de pontos)
+_route_cache = {}
+
+
+def _check_osrm():
+    """Testa se o servidor OSRM esta acessivel."""
+    global _osrm_available
+    if _osrm_available is not None:
+        return _osrm_available
+    try:
+        # Teste rapido: rota curta no Porto
+        r = requests.get(
+            f"{OSRM_BASE}/route/v1/driving/-8.61,41.15;-8.62,41.16",
+            params={"overview": "false"},
+            timeout=5
+        )
+        _osrm_available = (r.status_code == 200 and r.json().get("code") == "Ok")
+    except Exception:
+        _osrm_available = False
+    return _osrm_available
+
+
+def osrm_route(lat1, lon1, lat2, lon2):
+    """
+    Obtem distancia (km) e duracao (minutos) reais pela estrada via OSRM.
+
+    Retorna (distance_km, duration_minutes) ou None se falhar.
+    OSRM usa coordenadas na ordem lon,lat (nao lat,lon!).
+    """
+    # Cache key com 4 decimais (precisao ~11m)
+    key = (round(lat1, 4), round(lon1, 4), round(lat2, 4), round(lon2, 4))
+    if key in _route_cache:
+        return _route_cache[key]
+
+    # Mesma localizacao
+    if key[0] == key[2] and key[1] == key[3]:
+        _route_cache[key] = (0.0, 0.0)
+        return (0.0, 0.0)
+
+    try:
+        url = f"{OSRM_BASE}/route/v1/driving/{lon1},{lat1};{lon2},{lat2}"
+        r = requests.get(url, params={"overview": "false"}, timeout=OSRM_TIMEOUT)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("code") == "Ok" and data.get("routes"):
+                route = data["routes"][0]
+                dist_km = route["distance"] / 1000.0  # metros → km
+                dur_min = route["duration"] / 60.0     # segundos → minutos
+                result = (dist_km, dur_min)
+                _route_cache[key] = result
+                return result
+    except Exception:
+        pass
+
+    return None
+
+
+def osrm_table(points):
+    """
+    Obtem matriz de distancias e duracoes para N pontos via OSRM Table API.
+
+    Args:
+        points: lista de (lat, lon) — primeiro ponto e tipicamente o deposito
+
+    Retorna (dist_matrix_km, time_matrix_min) ou None se falhar.
+    dist_matrix[i][j] = distancia em km de i para j
+    time_matrix[i][j] = duracao em minutos de i para j
+    """
+    if not points or len(points) < 2:
+        return None
+
+    if len(points) > OSRM_MAX_TABLE_SIZE:
+        return None
+
+    # Construir string de coordenadas: lon,lat;lon,lat;...
+    coords = ";".join(f"{lon},{lat}" for lat, lon in points)
+    url = f"{OSRM_BASE}/table/v1/driving/{coords}"
+
+    try:
+        r = requests.get(
+            url,
+            params={"annotations": "distance,duration"},
+            timeout=OSRM_TIMEOUT * 2  # table pode demorar mais
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("code") == "Ok":
+                durations = data["durations"]  # segundos
+                distances = data["distances"]  # metros
+
+                n = len(points)
+                dist_km = [[0.0] * n for _ in range(n)]
+                time_min = [[0.0] * n for _ in range(n)]
+
+                for i in range(n):
+                    for j in range(n):
+                        d = distances[i][j]
+                        t = durations[i][j]
+                        dist_km[i][j] = (d / 1000.0) if d is not None else 0.0
+                        time_min[i][j] = (t / 60.0) if t is not None else 0.0
+
+                return dist_km, time_min
+    except Exception:
+        pass
+
+    return None
+
+
+def clear_cache():
+    """Limpa o cache de rotas (chamar entre dias diferentes se necessario)."""
+    global _route_cache, _osrm_available
+    _route_cache.clear()
+    _osrm_available = None
+
+
+# ── Coordenadas aproximadas por codigo postal ──
 POSTAL_COORDS = {
     # Porto centro
     "4000": (41.1496, -8.6109),
@@ -53,11 +175,9 @@ POSTAL_COORDS = {
     "4785": (41.3200, -8.5000),
     # Braga
     "4700": (41.5503, -8.4200),
-    "4705": (41.5503, -8.4200),
+    "4705": (41.5700, -8.3900),
     "4710": (41.5600, -8.3800),
     "4715": (41.5500, -8.4500),
-    # Celeiros Braga
-    "4705": (41.5700, -8.3900),
     # Barcelos
     "4750": (41.5321, -8.6174),
     "4755": (41.5400, -8.6000),
@@ -105,8 +225,7 @@ POSTAL_COORDS = {
 def geocode_postal(postal_code: str) -> tuple:
     """
     Converte codigo postal em (lat, lon).
-    Tenta o prefixo de 4 digitos. Se nao encontrar, tenta 3 ou 2 digitos
-    e devolve o mais proximo.
+    Tenta o prefixo de 4 digitos. Se nao encontrar, tenta 3 ou 2 digitos.
     """
     if not postal_code:
         return (0.0, 0.0)
@@ -151,26 +270,36 @@ def haversine_km(lat1, lon1, lat2, lon2):
 
 
 def estimate_distance_km(lat1, lon1, lat2, lon2, road_factor=1.35):
-    """Distancia estimada por estrada (haversine × fator)."""
+    """
+    Distancia estimada por estrada.
+    Tenta OSRM primeiro; se falhar, usa haversine × road_factor.
+    """
+    if _check_osrm():
+        result = osrm_route(lat1, lon1, lat2, lon2)
+        if result:
+            return result[0]  # distancia real em km
     return haversine_km(lat1, lon1, lat2, lon2) * road_factor
 
 
 def estimate_travel_minutes(dist_km, lat1, lon1, lat2, lon2, config):
     """
     Tempo de viagem estimado em minutos.
-    Usa velocidade urbana se ambos os pontos estao dentro da mesma area,
-    intercidade se estao longe.
+    Tenta OSRM primeiro; se falhar, usa velocidades medias.
     """
     if dist_km < 0.5:
         return 2.0
 
-    straight_km = haversine_km(lat1, lon1, lat2, lon2)
+    if _check_osrm():
+        result = osrm_route(lat1, lon1, lat2, lon2)
+        if result:
+            return result[1]  # duracao real em minutos
 
+    # Fallback: velocidades medias
+    straight_km = haversine_km(lat1, lon1, lat2, lon2)
     if straight_km < 5:
         speed = config['speed']['urban']
     elif straight_km < 20:
         speed = config['speed']['suburban']
     else:
         speed = config['speed']['intercity']
-
     return (dist_km / speed) * 60
