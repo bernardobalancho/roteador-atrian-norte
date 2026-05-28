@@ -1,0 +1,186 @@
+# ============================================================
+# CONFIGURACAO DO ROTEADOR ATRIAN NORTE
+# Todos os parametros que mudam por utilizacao estao aqui.
+# Edita este ficheiro — nao precisas de mexer no codigo Python.
+# ============================================================
+
+# --- Armazem de partida ---
+depot:
+  name: "Modivas - Vila do Conde"
+  lat: 41.3158
+  lon: -8.7292
+
+# --- Horarios de trabalho ---
+# Dias normais: terca a sexta (weekday 1-4)
+# Dias reduzidos: segunda (0) e sabado (5)
+work_hours:
+  normal:
+    start: "06:30"
+    max_hours: 9.0
+  reduced:
+    start: "06:30"       # Baseado nos outputs reais (06:30, nao 07:00)
+    max_hours: 5.0        # Baseado no output do sabado (5h, nao 5h30)
+    end_by: "12:30"
+  reduced_days: [0, 5]    # 0=segunda, 5=sabado
+
+# --- Tempos de carga no armazem (por viatura) ---
+loading:
+  base_minutes: 40        # Para ate 10 clientes
+  base_clients: 10
+  extra_minutes_per_client: 2   # Por cada cliente acima de 10
+
+# --- Tempo de descarga por cliente ---
+# 8 min se < 5 caixas; +2 min por cada intervalo de 5 caixas acima
+unloading:
+  base_minutes: 8
+  threshold_boxes: 5      # Abaixo disto, tempo = base
+  extra_minutes: 2        # Por cada intervalo adicional
+  interval_size: 5        # Tamanho do intervalo
+
+# --- Reducoes de tempo ---
+porto_time_reduction: 0.10       # -10% no tempo de descarga no Porto
+tiago_support_reduction: 0.10    # -10% adicional quando Tiago apoia
+
+# --- Combustivel e distancias ---
+fuel:
+  price_per_liter: 1.65
+  consumption_per_100km: 7.0     # litros/100km
+
+# Fator de correcao estrada (haversine → distancia real)
+road_factor: 1.35
+
+# Velocidades medias (km/h)
+speed:
+  urban: 30          # Dentro de cidades (Porto, Gaia, etc.)
+  suburban: 50       # Periferia
+  intercity: 70      # Entre cidades (autoestrada/nacional)
+
+# --- Frota (pode ser alterado por dia — ferias, faltas, etc.) ---
+# Se quiseres desativar um motorista, muda "ativo" para false
+fleet:
+  - plate: "AS-04-CB"
+    driver: "Rui"
+    active: true
+    max_volume_m3: 10.0
+    max_boxes: 220
+    home_city: "Porto"
+    home_lat: 41.1579
+    home_lon: -8.6291
+    priority: 1           # Carros por ordem de prioridade (1=sempre sai)
+
+  - plate: "BH-01-QX"
+    driver: "Gustavo"
+    active: true
+    max_volume_m3: 10.0
+    max_boxes: 220
+    home_city: "Gondomar"
+    home_lat: 41.1496
+    home_lon: -8.5328
+    priority: 2
+
+  - plate: "BC-04-XV"
+    driver: "Andre"
+    active: true
+    max_volume_m3: 10.0
+    max_boxes: 220
+    home_city: "Povoa de Varzim"
+    home_lat: 41.3833
+    home_lon: -8.7667
+    priority: 3
+
+  - plate: "24-SN-24"
+    driver: "Luis Martins"
+    active: true
+    max_volume_m3: 8.0
+    max_boxes: 170
+    home_city: "Matosinhos"
+    home_lat: 41.1844
+    home_lon: -8.6903
+    priority: 4
+
+  - plate: "83-SI-13"
+    driver: "Tiago Machado"
+    active: true
+    is_tiago: true        # Viatura especial — regras do Tiago
+    max_volume_m3: 6.0
+    max_boxes: 130
+    home_city: "Gondomar"
+    home_lat: 41.1496
+    home_lon: -8.5328
+    priority: 5            # So sai se necessario
+
+# --- Mapeamento de zonas (codigo rota no input → nome da zona) ---
+zone_map:
+  "PORZ1E": "Porto I (Este)"
+  "PORZ1O": "Porto II (Oeste)"
+  "PORZ1ESP": "Porto Centro Especial"
+  "PORZ2": "Litoral Norte"
+  "PORZ2 - LIT": "Litoral Norte"
+  "PORZ3": "Matosinhos"
+  "PORZ3 - MTS": "Matosinhos"
+  "PORZ4": "Braga, Barcelos"
+  "PORZ4 - BRA": "Braga, Barcelos"
+  "PORZ5": "Guimaraes, Famalicao, Santo Tirso"
+  "PORZ5 - GUI": "Guimaraes, Famalicao, Santo Tirso"
+  "PORZ6": "Douro"
+  "PORZ6 - DOU": "Douro"
+  "PORZ7": "Gaia Litoral"
+  "PORZ7 - GAI": "Gaia Litoral"
+  "PORZ8": "Aveiro"
+  "PORZ8 - AVE": "Aveiro"
+  "PORZ9": "Maia, Pacos de Ferreira"
+  "PORZ9 - MPF": "Maia, Pacos de Ferreira"
+
+# --- Mapa de distribuicao (zonas × dias da semana) ---
+# dias: 0=seg, 1=ter, 2=qua, 3=qui, 4=sex, 5=sab
+distribution_map:
+  "Litoral Norte":
+    days: [2, 5]
+    preferred_drivers: ["Andre", "Tiago Machado", "Luis Martins"]
+
+  "Matosinhos":
+    days: [2, 5]
+    preferred_drivers: ["Gustavo", "Tiago Machado", "Luis Martins"]
+
+  "Braga, Barcelos":
+    days: [2, 5]
+    preferred_drivers: ["Luis Martins", "Gustavo", "Tiago Machado"]
+
+  "Guimaraes, Famalicao, Santo Tirso":
+    days: [0, 3]
+    preferred_drivers: ["Gustavo", "Tiago Machado", "Andre"]
+
+  "Douro":
+    days: [0, 3]
+    preferred_drivers: ["Luis Martins", "Andre", "Tiago Machado"]
+
+  "Porto I (Este)":
+    days: [0, 2, 3, 4, 5]
+    preferred_drivers: ["Rui", "Gustavo", "Tiago Machado"]
+
+  "Porto II (Oeste)":
+    days: [0, 1, 2, 3, 5]
+    preferred_drivers: ["Rui", "Gustavo", "Tiago Machado"]
+
+  "Gaia Litoral":
+    days: [1, 4]
+    preferred_drivers: ["Andre", "Luis Martins", "Tiago Machado"]
+
+  "Aveiro":
+    days: [1, 4]
+    preferred_drivers: ["Luis Martins", "Andre", "Tiago Machado"]
+
+  "Maia, Pacos de Ferreira":
+    days: [1, 4]
+    preferred_drivers: ["Gustavo", "Luis Martins", "Tiago Machado"]
+
+  "Porto Centro Especial":
+    days: [0, 1, 2, 3, 4, 5]
+    preferred_drivers: ["Rui", "Gustavo", "Tiago Machado", "Andre"]
+
+# --- Cidades consideradas "Porto" para reducao de 10% ---
+porto_cities:
+  - "PORTO"
+
+# Numero maximo de rotas/zonas por viatura
+max_routes_per_vehicle: 3

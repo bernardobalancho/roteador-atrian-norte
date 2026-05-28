@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.DS_Store
+output_test/
+*.tmp
+.env
+.claude/
+
+# Dados (não subir para o GitHub)
+*.xlsx
+*.docx
+*.png
+MAPA_*
+Input *
+PROMPT *
+Captura *
