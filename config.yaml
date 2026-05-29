@@ -49,11 +49,48 @@ fuel:
 # Fator de correcao estrada (haversine → distancia real) — so usado se OSRM indisponivel
 road_factor: 1.35
 
-# Fator de transito (%) — ajuste global nos tempos de viagem
-# 0 = sem ajuste, 20 = +20% tempo (transito moderado), -10 = condicoes ideais
-traffic_factor: 0
+# --- Perfis de transito por hora do dia ---
+# Tipo de trajeto determinado automaticamente:
+#   urbano: distancia em linha reta < 10 km (centro de cidades)
+#   suburbano: 10-30 km (periferia, cidades proximas)
+#   intercidade: >30 km (autoestrada/nacional)
+#
+# Valores em percentagem: 0.10 = +10%, 0.35 = +35%, 0 = sem ajuste
+# Podes alterar estes valores conforme a realidade
+traffic_profiles:
+  bands:
+    - start: "06:00"
+      end: "08:00"
+      urban: 0.10
+      suburban: 0.05
+      intercity: 0.00
+    - start: "08:00"
+      end: "09:30"
+      urban: 0.35
+      suburban: 0.20
+      intercity: 0.15
+    - start: "09:30"
+      end: "11:30"
+      urban: 0.15
+      suburban: 0.05
+      intercity: 0.00
+    - start: "11:30"
+      end: "14:00"
+      urban: 0.20
+      suburban: 0.10
+      intercity: 0.05
+    - start: "14:00"
+      end: "17:00"
+      urban: 0.10
+      suburban: 0.05
+      intercity: 0.00
+    - start: "17:00"
+      end: "20:00"
+      urban: 0.30
+      suburban: 0.20
+      intercity: 0.15
 
-# Velocidades medias (km/h)
+# Velocidades medias (km/h) — so usadas se OSRM indisponivel
 speed:
   urban: 30          # Dentro de cidades (Porto, Gaia, etc.)
   suburban: 50       # Periferia

@@ -18,7 +18,52 @@ from ortools.constraint_solver import routing_enums_pb2, pywrapcp
 
 from .models import PickingLine, Stop, Vehicle, AssignedStop, RoutePlan
 from .geo import (geocode_postal, estimate_distance_km, estimate_travel_minutes,
-                   osrm_table, _check_osrm)
+                   osrm_table, _check_osrm, haversine_km)
+
+
+def _get_traffic_multiplier(clock_minutes, lat1, lon1, lat2, lon2, config):
+    """
+    Devolve o multiplicador de transito baseado na hora e tipo de trajeto.
+
+    O tipo de trajeto e determinado pela distancia em linha reta:
+      - urbano: <10 km (centro de cidades, ruas com transito)
+      - suburbano: 10-30 km (periferia, estradas nacionais)
+      - intercidade: >30 km (autoestrada)
+
+    Args:
+        clock_minutes: minutos desde meia-noite (ex: 510 = 08:30)
+        lat1, lon1: ponto de origem
+        lat2, lon2: ponto de destino
+        config: configuracao com traffic_profiles
+
+    Returns:
+        float: multiplicador (ex: 1.35 para +35% de transito)
+    """
+    profiles = config.get('traffic_profiles', {})
+    bands = profiles.get('bands', [])
+    if not bands:
+        return 1.0
+
+    # Classificar tipo de trajeto pela distancia em linha reta
+    straight_km = haversine_km(lat1, lon1, lat2, lon2)
+    if straight_km < 10:
+        leg_type = 'urban'
+    elif straight_km < 30:
+        leg_type = 'suburban'
+    else:
+        leg_type = 'intercity'
+
+    # Encontrar banda horaria correspondente
+    for band in bands:
+        bh, bm = map(int, band['start'].split(':'))
+        eh, em = map(int, band['end'].split(':'))
+        band_start = bh * 60 + bm
+        band_end = eh * 60 + em
+        if band_start <= clock_minutes < band_end:
+            factor = band.get(leg_type, 0)
+            return 1.0 + factor
+
+    return 1.0  # Fora de todas as bandas (ex: antes das 6h) = sem ajuste
 
 
 def _parse_time(text):
@@ -353,7 +398,6 @@ def _estimate_route_hours(stops, depot_lat, depot_lon, config):
     total_min += load_min
 
     rf = config.get('road_factor', 1.35)
-    traffic = config.get('traffic_factor', 0.0)  # percentagem extra de transito
 
     wh = config['work_hours']['normal']
     start_h, start_m = map(int, wh['start'].split(':'))
@@ -374,8 +418,10 @@ def _estimate_route_hours(stops, depot_lat, depot_lon, config):
                 best_i = i
         stop = remaining.pop(best_i)
         travel = estimate_travel_minutes(best_dist, cur_lat, cur_lon, stop.lat, stop.lon, config)
-        # Aplicar fator de transito
-        travel *= (1 + traffic / 100)
+        # Fator de transito automatico (por hora e distancia)
+        traffic_mult = _get_traffic_multiplier(
+            current_clock, cur_lat, cur_lon, stop.lat, stop.lon, config)
+        travel *= traffic_mult
         arrival = current_clock + travel
         # Wait for time window
         if stop.time_window_start and arrival < stop.time_window_start:
@@ -387,7 +433,9 @@ def _estimate_route_hours(stops, depot_lat, depot_lon, config):
     # Return trip to depot
     d = estimate_distance_km(cur_lat, cur_lon, depot_lat, depot_lon, rf)
     travel = estimate_travel_minutes(d, cur_lat, cur_lon, depot_lat, depot_lon, config)
-    travel *= (1 + traffic / 100)
+    traffic_mult = _get_traffic_multiplier(
+        current_clock, cur_lat, cur_lon, depot_lat, depot_lon, config)
+    travel *= traffic_mult
     total_min += travel
 
     return total_min / 60
@@ -678,7 +726,6 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
     rf = config.get('road_factor', 1.35)
     porto_red = config.get('porto_time_reduction', 0.10)
     tiago_red = config.get('tiago_support_reduction', 0.10)
-    traffic = config.get('traffic_factor', 0.0)  # percentagem extra de transito
 
     assigned_stops = []
     current_time = departure_minutes
@@ -691,8 +738,10 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
     for i, stop in enumerate(ordered_stops):
         dist = estimate_distance_km(current_lat, current_lon, stop.lat, stop.lon, rf)
         travel = estimate_travel_minutes(dist, current_lat, current_lon, stop.lat, stop.lon, config)
-        # Aplicar fator de transito
-        travel *= (1 + traffic / 100)
+        # Aplicar fator de transito automatico (por hora e tipo de trajeto)
+        traffic_mult = _get_traffic_multiplier(
+            current_time, current_lat, current_lon, stop.lat, stop.lon, config)
+        travel *= traffic_mult
         total_km += dist
 
         arrival_time = current_time + travel
@@ -732,7 +781,9 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
                                       vehicle.home_lat, vehicle.home_lon, rf)
     home_travel = estimate_travel_minutes(home_dist, current_lat, current_lon,
                                            vehicle.home_lat, vehicle.home_lon, config)
-    home_travel *= (1 + traffic / 100)
+    traffic_mult = _get_traffic_multiplier(
+        last_departure, current_lat, current_lon, vehicle.home_lat, vehicle.home_lon, config)
+    home_travel *= traffic_mult
     total_km += home_dist
     arrival_home = last_departure + home_travel
     total_hours = (arrival_home - start_minutes) / 60
@@ -858,7 +909,6 @@ def _enforce_time_windows(stops, depot_lat, depot_lon, config, weekday):
     current_time = departure
     cur_lat, cur_lon = depot_lat, depot_lon
     rf = config.get('road_factor', 1.35)
-    traffic = config.get('traffic_factor', 0.0)
 
     all_remaining = list(stops)
 
@@ -869,7 +919,9 @@ def _enforce_time_windows(stops, depot_lat, depot_lon, config, weekday):
         for s in all_remaining:
             dist = estimate_distance_km(cur_lat, cur_lon, s.lat, s.lon, rf)
             travel = estimate_travel_minutes(dist, cur_lat, cur_lon, s.lat, s.lon, config)
-            travel *= (1 + traffic / 100)
+            traffic_mult = _get_traffic_multiplier(
+                current_time, cur_lat, cur_lon, s.lat, s.lon, config)
+            travel *= traffic_mult
             arrival = current_time + travel
 
             # Penalizar se chegamos depois da janela fechar
@@ -893,7 +945,9 @@ def _enforce_time_windows(stops, depot_lat, depot_lon, config, weekday):
             all_remaining.remove(best)
             dist = estimate_distance_km(cur_lat, cur_lon, best.lat, best.lon, rf)
             travel = estimate_travel_minutes(dist, cur_lat, cur_lon, best.lat, best.lon, config)
-            travel *= (1 + traffic / 100)
+            traffic_mult = _get_traffic_multiplier(
+                current_time, cur_lat, cur_lon, best.lat, best.lon, config)
+            travel *= traffic_mult
             arrival = current_time + travel
             if best.time_window_start and arrival < best.time_window_start:
                 arrival = best.time_window_start
