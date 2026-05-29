@@ -594,11 +594,11 @@ def _redistribute_with_tiago(assignments, non_tiago, tiago, config, max_hours):
     _rebalance_by_hours(assignments, all_vehicles, config, max_hours)
 
 
-def sequence_stops(stops, depot_lat, depot_lon, home_lat, home_lon, config):
+def sequence_stops(stops, depot_lat, depot_lon, home_lat, home_lon, config, weekday=None):
     """
     Usa OR-Tools para encontrar a melhor ordem de visita.
-    Resolve um TSP (Travelling Salesman Problem) com janelas horarias.
-    Usa OSRM Table API para obter a matriz de distancias/tempos reais.
+    Resolve um TSP com janelas horarias REAIS integradas no solver.
+    Usa OSRM Table API para a matriz de distancias/tempos reais.
     """
     if len(stops) == 0:
         return []
@@ -616,12 +616,10 @@ def sequence_stops(stops, depot_lat, depot_lon, home_lat, home_lon, config):
         osrm_result = osrm_table(all_points)
 
     if osrm_result:
-        # Usar distancias e tempos reais
         dist_km_matrix, time_min_matrix = osrm_result
         dist_matrix = [[int(dist_km_matrix[i][j] * 1000) for j in range(n)] for i in range(n)]
         time_matrix = [[int(time_min_matrix[i][j]) for j in range(n)] for i in range(n)]
     else:
-        # Fallback: haversine × road_factor
         dist_matrix = [[0] * n for _ in range(n)]
         time_matrix = [[0] * n for _ in range(n)]
         for i in range(n):
@@ -638,8 +636,8 @@ def sequence_stops(stops, depot_lat, depot_lon, home_lat, home_lon, config):
                     all_points[j][0], all_points[j][1],
                     config
                 )
-                dist_matrix[i][j] = int(d * 1000)  # metros
-                time_matrix[i][j] = int(t)          # minutos
+                dist_matrix[i][j] = int(d * 1000)
+                time_matrix[i][j] = int(t)
 
     # Adicionar tempo de descarga ao tempo de viagem
     for j in range(1, n):
@@ -658,32 +656,57 @@ def sequence_stops(stops, depot_lat, depot_lon, home_lat, home_lon, config):
     transit_callback_index = routing.RegisterTransitCallback(time_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
 
-    # Adicionar dimensao de tempo para janelas horarias
+    # Calcular hora de saida do armazem (para converter janelas absolutas em relativas)
+    is_reduced = False
+    if weekday is not None:
+        is_reduced = weekday in config['work_hours'].get('reduced_days', [])
+    wh = config['work_hours']['reduced'] if is_reduced else config['work_hours']['normal']
+    start_h, start_m = map(int, wh['start'].split(':'))
+    start_minutes = start_h * 60 + start_m
+    lc = config['loading']
+    load_min = lc['base_minutes'] + max(0, len(stops) - lc['base_clients']) * lc['extra_minutes_per_client']
+    departure_minutes = start_minutes + load_min
+
+    # Dimensao de tempo com janelas horarias reais
     routing.AddDimension(
         transit_callback_index,
-        120,   # max espera (minutos)
-        900,   # max tempo total (15 horas em minutos)
-        False,
+        180,   # max espera (3 horas — para janelas tipo "a partir das 10h")
+        900,   # max tempo total (15 horas)
+        True,  # Force start cumul to zero (tempo comeca em 0 na saida do armazem)
         'Time'
     )
     time_dimension = routing.GetDimensionOrDie('Time')
 
-    # Janelas horarias
-    # O "tempo 0" do OR-Tools corresponde a hora de saida do armazem
+    # Janelas horarias reais convertidas para minutos relativos a saida do armazem
     for i in range(1, n):
         stop = stops[i-1]
         idx = manager.NodeToIndex(i)
-        if stop.time_window_start is not None or stop.time_window_end is not None:
-            # Converter para minutos relativos a saida do armazem
-            # (sera ajustado no calculo final)
-            tw_start = 0
-            tw_end = 900  # 15 horas
-            if stop.time_window_end is not None:
-                # Janela real sera respeitada no calculo de tempos final
-                pass
-            time_dimension.CumulVar(idx).SetRange(tw_start, tw_end)
-        else:
-            time_dimension.CumulVar(idx).SetRange(0, 900)
+
+        tw_start_rel = 0
+        tw_end_rel = 900
+
+        if stop.time_window_start is not None:
+            tw_start_rel = max(0, stop.time_window_start - departure_minutes)
+        if stop.time_window_end is not None:
+            tw_end_rel = max(0, stop.time_window_end - departure_minutes)
+            # Dar margem de 30 min para o solver encontrar solucao
+            # (melhor chegar um pouco atrasado do que nao ter solucao)
+            tw_end_rel += 30
+
+        time_dimension.CumulVar(idx).SetRange(tw_start_rel, tw_end_rel)
+
+    # Deposito: janela [0, 0] — saida imediata
+    depot_idx = manager.NodeToIndex(0)
+    time_dimension.CumulVar(depot_idx).SetRange(0, 0)
+
+    # Penalizar atrasos em janelas horarias (soft constraint)
+    for i in range(1, n):
+        stop = stops[i-1]
+        if stop.time_window_end is not None:
+            idx = manager.NodeToIndex(i)
+            tw_end_rel = max(0, stop.time_window_end - departure_minutes)
+            # Custo extra por cada minuto de atraso apos a janela
+            time_dimension.SetCumulVarSoftUpperBound(idx, tw_end_rel, 50)
 
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
     search_parameters.first_solution_strategy = (
@@ -706,16 +729,23 @@ def sequence_stops(stops, depot_lat, depot_lon, home_lat, home_lon, config):
             index = solution.Value(routing.NextVar(index))
         return order
     else:
+        # Se nao encontrar solucao com janelas, tentar sem (so minimizar tempo)
+        # Isto acontece se as janelas sao impossiveis de cumprir
+        routing2 = pywrapcp.RoutingModel(manager)
+        transit_cb2 = routing2.RegisterTransitCallback(time_callback)
+        routing2.SetArcCostEvaluatorOfAllVehicles(transit_cb2)
+        solution2 = routing2.SolveWithParameters(search_parameters)
+        if solution2:
+            order = []
+            index = routing2.Start(0)
+            while not routing2.IsEnd(index):
+                node = manager.IndexToNode(index)
+                if node > 0:
+                    order.append(node - 1)
+                index = solution2.Value(routing2.NextVar(index))
+            return order
         return list(range(len(stops)))
 
-
-def _time_window_priority(stop):
-    """Prioridade para paragens com janela horaria (menor = mais urgente)."""
-    if stop.time_window_end is not None:
-        return stop.time_window_end
-    if stop.time_window_start is not None:
-        return stop.time_window_start
-    return 9999
 
 
 def calculate_route_times(ordered_stops, vehicle, config, weekday,
@@ -875,15 +905,12 @@ def route(lines, config, expedition_date):
         if not v_stops:
             continue
 
-        # Sequenciar com OR-Tools
+        # Sequenciar com OR-Tools (janelas horarias integradas no solver)
         order = sequence_stops(
             v_stops, depot_lat, depot_lon,
-            vehicle.home_lat, vehicle.home_lon, config
+            vehicle.home_lat, vehicle.home_lon, config, weekday
         )
         ordered = [v_stops[i] for i in order]
-
-        # Reordenar para respeitar janelas horarias (ajuste fino)
-        ordered = _enforce_time_windows(ordered, depot_lat, depot_lon, config, weekday)
 
         # Calcular tempos
         is_supported = (not tiago_in_dist and tiago_supports_plate == vehicle.plate)
@@ -896,79 +923,3 @@ def route(lines, config, expedition_date):
     return route_plans
 
 
-def _enforce_time_windows(stops, depot_lat, depot_lon, config, weekday):
-    """
-    Ajuste fino: move paragens com janela horaria apertada para o inicio.
-    Heuristica simples: paragens com time_window_end mais cedo vao primeiro,
-    mantendo a logica geografica para as restantes.
-    """
-    tw_stops = [s for s in stops if s.time_window_end is not None]
-    other_stops = [s for s in stops if s.time_window_end is None]
-
-    tw_stops.sort(key=lambda s: s.time_window_end)
-
-    is_reduced = weekday in config['work_hours'].get('reduced_days', [])
-    wh = config['work_hours']['reduced'] if is_reduced else config['work_hours']['normal']
-    start_h, start_m = map(int, wh['start'].split(':'))
-    start_min = start_h * 60 + start_m
-
-    lc = config['loading']
-    n = len(stops)
-    load = lc['base_minutes'] + max(0, n - lc['base_clients']) * lc['extra_minutes_per_client']
-    departure = start_min + load
-
-    result = []
-    placed_tw = set()
-
-    # Inserir stops com janela nos pontos certos
-    current_time = departure
-    cur_lat, cur_lon = depot_lat, depot_lon
-    rf = config.get('road_factor', 1.35)
-
-    all_remaining = list(stops)
-
-    while all_remaining:
-        best = None
-        best_score = float('inf')
-
-        for s in all_remaining:
-            dist = estimate_distance_km(cur_lat, cur_lon, s.lat, s.lon, rf)
-            travel = estimate_travel_minutes(dist, cur_lat, cur_lon, s.lat, s.lon, config)
-            traffic_mult = _get_traffic_multiplier(
-                current_time, cur_lat, cur_lon, s.lat, s.lon, config)
-            travel *= traffic_mult
-            arrival = current_time + travel
-
-            # Penalizar se chegamos depois da janela fechar
-            penalty = 0
-            if s.time_window_end and arrival > s.time_window_end:
-                penalty = (arrival - s.time_window_end) * 100
-
-            # Bonus para janelas apertadas que ainda podemos cumprir
-            if s.time_window_end and arrival <= s.time_window_end:
-                urgency = s.time_window_end - arrival
-                penalty -= max(0, 60 - urgency)
-
-            score = travel + penalty
-
-            if score < best_score:
-                best_score = score
-                best = s
-
-        if best:
-            result.append(best)
-            all_remaining.remove(best)
-            dist = estimate_distance_km(cur_lat, cur_lon, best.lat, best.lon, rf)
-            travel = estimate_travel_minutes(dist, cur_lat, cur_lon, best.lat, best.lon, config)
-            traffic_mult = _get_traffic_multiplier(
-                current_time, cur_lat, cur_lon, best.lat, best.lon, config)
-            travel *= traffic_mult
-            arrival = current_time + travel
-            if best.time_window_start and arrival < best.time_window_start:
-                arrival = best.time_window_start
-            current_time = arrival + best.unload_minutes
-            cur_lat, cur_lon = best.lat, best.lon
-        else:
-            break
-
-    return result
