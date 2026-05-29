@@ -13,6 +13,7 @@ from engine.loader import load_picking_map, load_criteria
 from engine.router import route
 from engine.writer import write_routed_map, write_pre_carga
 from engine.geo import _check_osrm
+from engine.pdf_guide import generate_all_guides_zip
 
 
 st.set_page_config(
@@ -146,12 +147,22 @@ def main():
 
         st.subheader("Frota ativa")
         fleet_active = {}
+        driver_adjustments = {}
         for v in config['fleet']:
-            fleet_active[v['plate']] = st.checkbox(
-                f"{v['plate']} — {v['driver']}",
-                value=v.get('active', True),
-                key=f"fleet_{v['plate']}"
-            )
+            col_check, col_adj = st.columns([3, 2])
+            with col_check:
+                fleet_active[v['plate']] = st.checkbox(
+                    f"{v['plate']} — {v['driver']}",
+                    value=v.get('active', True),
+                    key=f"fleet_{v['plate']}"
+                )
+            with col_adj:
+                driver_adjustments[v['plate']] = st.number_input(
+                    "Ajuste %",
+                    min_value=-30, max_value=30, value=0, step=5,
+                    key=f"adj_{v['plate']}",
+                    help=f"Ajuste tempo para {v['driver']}. +% = mais tempo (novo motorista), -% = menos tempo (motorista rápido)"
+                )
 
         st.divider()
         st.subheader("Horários")
@@ -166,16 +177,17 @@ def main():
         else:
             road_factor = config.get('road_factor', 1.35)
             st.caption("🛰️ Distâncias reais via OSRM")
-        st.caption("🚦 Trânsito automático por hora e zona (config.yaml)")
+        st.caption("🚦 Trânsito automático por hora e zona")
         porto_reduction = st.slider(
-            "Ajuste Porto (%)",
+            "Ajuste centro Porto (%)",
             min_value=-30, max_value=30, value=int(config.get('porto_time_reduction', 0.10) * 100), step=5,
-            help="Positivo = menos tempo no Porto (descarga rápida), Negativo = mais tempo (trânsito, dificuldade estacionar)"
+            help="Aplica-se APENAS a entregas na cidade do Porto. Positivo = descarga mais rápida, Negativo = mais tempo (trânsito/estacionar)"
         )
 
     # Apply sidebar changes to config
     for v in config['fleet']:
         v['active'] = fleet_active.get(v['plate'], True)
+        v['driver_adjustment'] = driver_adjustments.get(v['plate'], 0) / 100
     config['work_hours']['normal']['start'] = start_time
     config['work_hours']['reduced']['start'] = start_time
     config['work_hours']['normal']['max_hours'] = max_hours_normal
@@ -363,7 +375,7 @@ def main():
         # ── Downloads ──
         st.subheader("📥 Download dos ficheiros")
 
-        dl1, dl2 = st.columns(2)
+        dl1, dl2, dl3 = st.columns(3)
 
         with dl1:
             with open(res['routed_path'], 'rb') as f:
@@ -384,6 +396,17 @@ def main():
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                 )
+
+        with dl3:
+            guides_zip = generate_all_guides_zip(plans, exp_date, cfg)
+            n_guides = len([p for p in plans if p.total_clients > 0])
+            st.download_button(
+                label=f"📄 Guias Motoristas ({n_guides} PDFs)",
+                data=guides_zip,
+                file_name=f"GUIAS_MOTORISTAS_{res['date_str']}.zip",
+                mime="application/zip",
+                use_container_width=True,
+            )
 
     else:
         st.info("👆 Faz upload do ficheiro de picking e clica **Calcular Rotas** para começar.")

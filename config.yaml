@@ -219,7 +219,8 @@ distribution_map:
     days: [0, 1, 2, 3, 4, 5]
     preferred_drivers: ["Rui", "Gustavo", "Tiago Machado", "Andre"]
 
-# --- Cidades consideradas "Porto" para reducao de 10% ---
+# --- Cidades consideradas "centro do Porto" para ajuste de descarga ---
+# Apenas cidade = "PORTO" (nao Matosinhos, Gaia, Maia, etc.)
 porto_cities:
   - "PORTO"
 

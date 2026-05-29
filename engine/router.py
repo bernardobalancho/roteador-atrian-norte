@@ -772,6 +772,13 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
     porto_red = config.get('porto_time_reduction', 0.10)
     tiago_red = config.get('tiago_support_reduction', 0.10)
 
+    # Ajuste individual do motorista (% extra ou menos no tempo total)
+    driver_adj = 0.0
+    for v in config.get('fleet', []):
+        if v['plate'] == vehicle.plate:
+            driver_adj = v.get('driver_adjustment', 0.0)
+            break
+
     assigned_stops = []
     current_time = departure_minutes
     current_lat, current_lon = depot_lat, depot_lon
@@ -787,6 +794,8 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
         traffic_mult = _get_traffic_multiplier(
             current_time, current_lat, current_lon, stop.lat, stop.lon, config)
         travel *= traffic_mult
+        # Aplicar ajuste individual do motorista
+        travel *= (1 + driver_adj)
         total_km += dist
 
         arrival_time = current_time + travel
@@ -801,6 +810,8 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
             unload *= (1 - porto_red)
         if tiago_supports:
             unload *= (1 - tiago_red)
+        # Aplicar ajuste individual do motorista a descarga
+        unload *= (1 + driver_adj)
 
         arrival_h = int(arrival_time) // 60
         arrival_m = int(arrival_time) % 60
@@ -829,6 +840,7 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
     traffic_mult = _get_traffic_multiplier(
         last_departure, current_lat, current_lon, vehicle.home_lat, vehicle.home_lon, config)
     home_travel *= traffic_mult
+    home_travel *= (1 + driver_adj)
     total_km += home_dist
     arrival_home = last_departure + home_travel
     total_hours = (arrival_home - start_minutes) / 60
