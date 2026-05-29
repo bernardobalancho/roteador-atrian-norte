@@ -25,10 +25,14 @@ def _get_traffic_multiplier(clock_minutes, lat1, lon1, lat2, lon2, config):
     """
     Devolve o multiplicador de transito baseado na hora e tipo de trajeto.
 
-    O tipo de trajeto e determinado pela distancia em linha reta:
-      - urbano: <10 km (centro de cidades, ruas com transito)
-      - suburbano: 10-30 km (periferia, estradas nacionais)
-      - intercidade: >30 km (autoestrada)
+    O tipo de trajeto e determinado pela distancia REAL (OSRM) vs distancia
+    em linha reta. Se a rota real e muito maior que a linha reta, e uma
+    zona urbana com muitas curvas/ruas. Se e similar, e autoestrada direta.
+
+    Classificacao:
+      - urbano: rota real < 15 km (entregas dentro da mesma cidade)
+      - suburbano: 15-40 km (cidades proximas, estradas nacionais)
+      - intercidade: >40 km (autoestrada, longas distancias)
 
     Args:
         clock_minutes: minutos desde meia-noite (ex: 510 = 08:30)
@@ -44,11 +48,22 @@ def _get_traffic_multiplier(clock_minutes, lat1, lon1, lat2, lon2, config):
     if not bands:
         return 1.0
 
-    # Classificar tipo de trajeto pela distancia em linha reta
-    straight_km = haversine_km(lat1, lon1, lat2, lon2)
-    if straight_km < 10:
+    # Usar distancia real (OSRM) para classificar o trajeto
+    from .geo import osrm_route, _check_osrm
+    real_km = None
+    if _check_osrm():
+        result = osrm_route(lat1, lon1, lat2, lon2)
+        if result:
+            real_km = result[0]
+
+    if real_km is None:
+        # Fallback: haversine × road_factor
+        real_km = haversine_km(lat1, lon1, lat2, lon2) * config.get('road_factor', 1.35)
+
+    # Classificar por distancia real pela estrada
+    if real_km < 15:
         leg_type = 'urban'
-    elif straight_km < 30:
+    elif real_km < 40:
         leg_type = 'suburban'
     else:
         leg_type = 'intercity'
