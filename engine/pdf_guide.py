@@ -98,7 +98,24 @@ def generate_driver_guide(plan, expedition_date, config):
         pdf.cell(0, 6, '* Tiago Machado apoia nesta rota (-10% tempo descarga)',
                  new_x='LMARGIN', new_y='NEXT')
 
-    pdf.ln(6)
+    pdf.ln(4)
+
+    # ── Mapa da rota ──
+    try:
+        from .map_generator import generate_route_image
+        map_bytes = generate_route_image(plan, config)
+        if map_bytes:
+            pdf.set_font('Helvetica', 'B', 12)
+            pdf.cell(0, 8, 'MAPA DA ROTA', new_x='LMARGIN', new_y='NEXT')
+            pdf.ln(1)
+            # Verificar se ha espaco na pagina (mapa = ~75mm de altura)
+            if pdf.get_y() > 190:
+                pdf.add_page()
+            map_io = io.BytesIO(map_bytes)
+            pdf.image(map_io, x=10, w=190)
+            pdf.ln(4)
+    except Exception:
+        pass  # Se falhar, continuar sem mapa
 
     # ── Tabela de paragens ──
     pdf.set_font('Helvetica', 'B', 12)

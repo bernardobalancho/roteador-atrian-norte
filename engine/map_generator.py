@@ -1,7 +1,9 @@
 """
 Gerador de mapas interativos com as rotas dos motoristas.
 Usa Folium (OpenStreetMap) + geometria real do OSRM.
+Usa staticmap para gerar imagens estaticas para PDFs.
 """
+import io
 import folium
 import requests
 
@@ -327,3 +329,132 @@ def _build_legend(plans, total_stops=0, invalid_stops=0,
         {diag}
     </div>
     """
+
+
+def generate_route_image(plan, config, width=720, height=420):
+    """
+    Gera uma imagem PNG estatica do mapa da rota de um motorista.
+    Usa staticmap (tiles OpenStreetMap) + OSRM para geometria real.
+
+    Args:
+        plan: RoutePlan de um motorista
+        config: configuracao (para o deposito)
+        width, height: dimensoes da imagem em pixels
+
+    Returns:
+        bytes: conteudo PNG da imagem, ou None se falhar
+    """
+    try:
+        from staticmap import StaticMap, CircleMarker, Line
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return None
+
+    if plan.total_clients == 0:
+        return None
+
+    depot_lat = config['depot']['lat']
+    depot_lon = config['depot']['lon']
+
+    # Criar mapa estatico
+    m = StaticMap(width, height,
+                  url_template='https://tile.openstreetmap.org/{z}/{x}/{y}.png')
+
+    # Recolher pontos da rota
+    route_points = [(depot_lat, depot_lon)]
+    valid_stops = []
+    for a in plan.stops:
+        if _is_valid_coord(a.stop.lat, a.stop.lon):
+            route_points.append((a.stop.lat, a.stop.lon))
+            valid_stops.append(a)
+    if _is_valid_coord(plan.vehicle.home_lat, plan.vehicle.home_lon):
+        route_points.append((plan.vehicle.home_lat, plan.vehicle.home_lon))
+
+    if len(route_points) < 2:
+        return None
+
+    # Obter geometria real da rota via OSRM
+    road_coords = _get_route_geometry(route_points)
+
+    if road_coords:
+        # Rota real pela estrada — converter para (lon, lat) para staticmap
+        line_coords = [(lon, lat) for lat, lon in road_coords]
+        m.add_line(Line(line_coords, '#2855a0', 3))
+    else:
+        # Fallback: linhas retas
+        line_coords = [(lon, lat) for lat, lon in route_points]
+        m.add_line(Line(line_coords, '#2855a0', 2))
+
+    # Marcador do deposito (quadrado preto grande)
+    m.add_marker(CircleMarker((depot_lon, depot_lat), '#000000', 9))
+    m.add_marker(CircleMarker((depot_lon, depot_lat), '#ffffff', 5))
+
+    # Marcadores das paragens (circulos azuis)
+    for a in valid_stops:
+        m.add_marker(CircleMarker((a.stop.lon, a.stop.lat), '#2855a0', 8))
+        m.add_marker(CircleMarker((a.stop.lon, a.stop.lat), '#ffffff', 5))
+
+    # Marcador de casa do motorista (circulo cinza)
+    if _is_valid_coord(plan.vehicle.home_lat, plan.vehicle.home_lon):
+        m.add_marker(CircleMarker(
+            (plan.vehicle.home_lon, plan.vehicle.home_lat), '#666666', 7))
+
+    # Renderizar mapa
+    try:
+        image = m.render()
+    except Exception:
+        return None
+
+    # Adicionar numeros das paragens com PIL
+    draw = ImageDraw.Draw(image)
+
+    # Tentar usar uma fonte pequena, senão usar a default
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 11)
+    except Exception:
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 11)
+        except Exception:
+            font = ImageFont.load_default()
+
+    # Converter coordenadas geo para pixels na imagem
+    # O staticmap nao expoe esta funcao diretamente, mas podemos usar os bounds
+    if hasattr(m, '_x_center') and hasattr(m, '_y_center'):
+        for a in valid_stops:
+            try:
+                # Converter lat/lon para pixel usando a projecao Mercator do staticmap
+                px = m._x_to_px(m._lon_to_x(a.stop.lon))
+                py = m._y_to_px(m._lat_to_y(a.stop.lat))
+                # Desenhar numero centrado
+                text = str(a.delivery_order)
+                bbox = draw.textbbox((0, 0), text, font=font)
+                tw = bbox[2] - bbox[0]
+                th = bbox[3] - bbox[1]
+                draw.text((px - tw // 2, py - th // 2 - 1), text,
+                          fill='#2855a0', font=font)
+            except Exception:
+                pass
+
+    # Adicionar legenda simples no canto inferior esquerdo
+    legend_y = height - 55
+    draw.rectangle([5, legend_y, 220, height - 5], fill='white', outline='#cccccc')
+    try:
+        font_sm = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
+    except Exception:
+        try:
+            font_sm = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 10)
+        except Exception:
+            font_sm = font
+    draw.text((10, legend_y + 4),
+              f"{plan.vehicle.driver} ({plan.vehicle.plate})", fill='#333', font=font_sm)
+    draw.text((10, legend_y + 18),
+              f"{plan.total_clients} clientes | {plan.total_km:.0f}km | {plan.total_hours:.1f}h",
+              fill='#666', font=font_sm)
+    # Simbolo do deposito
+    draw.text((10, legend_y + 32), "■ Armazem   ● Paragens   ● Casa",
+              fill='#888', font=font_sm)
+
+    # Converter para bytes PNG
+    buf = io.BytesIO()
+    image.save(buf, format='PNG', optimize=True)
+    return buf.getvalue()
