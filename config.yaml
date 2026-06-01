@@ -16,11 +16,11 @@ depot:
 work_hours:
   normal:
     start: "06:30"
-    max_hours: 9.0
+    max_hours: 8.5        # 8h30 — documento de instrucoes definitivo
   reduced:
-    start: "06:30"       # Baseado nos outputs reais (06:30, nao 07:00)
-    max_hours: 5.0        # Baseado no output do sabado (5h, nao 5h30)
-    end_by: "12:30"
+    start: "06:30"
+    max_hours: 5.5        # 5h30 — documento de instrucoes definitivo
+    end_by: "12:00"
   reduced_days: [0, 5]    # 0=segunda, 5=sabado
 
 # --- Tempos de carga no armazem (por viatura) ---
@@ -226,3 +226,13 @@ porto_cities:
 
 # Numero maximo de rotas/zonas por viatura
 max_routes_per_vehicle: 3
+
+# --- Restricoes de motoristas (soft constraints — "idealmente") ---
+# avoid_zones: zonas que o motorista deve evitar se possivel
+# avoid_cities: cidades (valor do campo cidade) que o motorista deve evitar
+driver_restrictions:
+  "Luis Martins":
+    avoid_zones: ["Porto I (Este)", "Porto II (Oeste)", "Porto Centro Especial"]
+    avoid_cities: ["PORTO"]
+  "Rui":
+    avoid_cities: ["CAIS DE GAIA", "V.N.GAIA"]

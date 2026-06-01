@@ -285,17 +285,143 @@ def build_vehicles(config):
     return vehicles
 
 
+def _match_transporter(transporter_text, vehicles):
+    """
+    Faz match do campo Transportador do input a uma viatura.
+    Tenta por matricula e por nome do motorista.
+    """
+    if not transporter_text or not str(transporter_text).strip():
+        return None
+    text = str(transporter_text).strip().upper()
+    if text in ('0', ''):
+        return None
+
+    for v in vehicles:
+        if v.plate.upper().replace('-', '').replace(' ', '') == text.replace('-', '').replace(' ', ''):
+            return v.plate
+    for v in vehicles:
+        if v.driver.upper() in text or text in v.driver.upper():
+            return v.plate
+    return None
+
+
+def _estimate_route_km(stops, depot_lat, depot_lon, config):
+    """Estimativa rapida de km totais de uma rota (nearest neighbor)."""
+    if not stops:
+        return 0
+    rf = config.get('road_factor', 1.35)
+    total_km = 0
+    remaining = list(stops)
+    cur_lat, cur_lon = depot_lat, depot_lon
+
+    while remaining:
+        best_i = 0
+        best_dist = float('inf')
+        for i, s in enumerate(remaining):
+            d = estimate_distance_km(cur_lat, cur_lon, s.lat, s.lon, rf)
+            if d < best_dist:
+                best_dist = d
+                best_i = i
+        stop = remaining.pop(best_i)
+        total_km += best_dist
+        cur_lat, cur_lon = stop.lat, stop.lon
+
+    total_km += estimate_distance_km(cur_lat, cur_lon, depot_lat, depot_lon, rf)
+    return total_km
+
+
+def _find_best_vehicle_for_zone(zone_name, zstops, assignments, vehicles,
+                                dist_map, restrictions, max_zones, config):
+    """
+    Encontra a melhor viatura para uma zona inteira.
+    Prioriza: motorista preferencial > proximidade geografica > restricoes.
+    """
+    depot_lat = config['depot']['lat']
+    depot_lon = config['depot']['lon']
+    rf = config.get('road_factor', 1.35)
+
+    zc = dist_map.get(zone_name, {})
+    preferred = zc.get('preferred_drivers', [])
+
+    z_lat = sum(s.lat for s in zstops) / len(zstops)
+    z_lon = sum(s.lon for s in zstops) / len(zstops)
+
+    best_plate = None
+    best_score = float('inf')
+
+    for v in vehicles:
+        current_zones = set(s.zone_name for s in assignments[v.plate])
+
+        # Hard: max zonas por viatura
+        if zone_name not in current_zones and len(current_zones) >= max_zones:
+            continue
+
+        # Hard: capacidade (com 10% tolerancia)
+        current_boxes = sum(s.total_boxes for s in assignments[v.plate])
+        zone_boxes = sum(s.total_boxes for s in zstops)
+        if current_boxes + zone_boxes > v.max_boxes * 1.1:
+            continue
+
+        score = 0.0
+
+        # Preferencia do motorista para esta zona (peso forte)
+        if v.driver in preferred:
+            idx = preferred.index(v.driver)
+            score += idx * 25
+        else:
+            score += 120
+
+        # Bonus se ja tem paragens nesta zona (manter zona junta)
+        if zone_name in current_zones:
+            score -= 60
+
+        # Penalidade de restricao (soft)
+        driver_restr = restrictions.get(v.driver, {})
+        if zone_name in driver_restr.get('avoid_zones', []):
+            score += 200
+
+        # Proximidade geografica
+        if assignments[v.plate]:
+            v_lat = sum(s.lat for s in assignments[v.plate]) / len(assignments[v.plate])
+            v_lon = sum(s.lon for s in assignments[v.plate]) / len(assignments[v.plate])
+            dist = haversine_km(v_lat, v_lon, z_lat, z_lon)
+            score += dist * 2
+        else:
+            dist = haversine_km(depot_lat, depot_lon, z_lat, z_lon)
+            score += dist * 0.5
+
+        if score < best_score:
+            best_score = score
+            best_plate = v.plate
+
+    if not best_plate:
+        return min(vehicles, key=lambda v: sum(s.total_boxes for s in assignments[v.plate])).plate
+    return best_plate
+
+
 def assign_stops_to_vehicles(stops, vehicles, config, weekday):
     """
     Atribui paragens a viaturas com base nas regras de negocio.
 
-    Estrategia:
-    1. Atribuir zonas pequenas ao motorista preferencial
-    2. Zonas grandes (>20 stops) sao divididas entre viaturas
-    3. Reequilibrar por capacidade estimada
-    4. So usar Tiago se os outros excederem o limite
+    Prioridades (documento de instrucoes definitivo):
+    1. Janelas horarias (tratadas no sequenciamento OR-Tools)
+    2. Transportador pre-atribuido no input
+    3. Evitar ativar viatura extra (Tiago)
+    4. Minimizar km totais da empresa
+    5. Capacidade das viaturas
+    6. Motorista preferencial por zona
+    7. Equilibrio de carga
+    8. Custo de combustivel
+
+    Regras:
+    - Maximo 3 zonas por viatura (max_routes_per_vehicle)
+    - Manter zonas inteiras num so motorista (nao dividir)
+    - Restricoes soft: Luis Martins evita Porto, Rui evita Cais de Gaia
+    - Clientes do mesmo codigo postal juntos (ja agrupados em build_stops)
     """
     dist_map = config.get('distribution_map', {})
+    restrictions = config.get('driver_restrictions', {})
+    max_zones = config.get('max_routes_per_vehicle', 3)
     is_reduced = weekday in config['work_hours'].get('reduced_days', [])
     max_hours = config['work_hours']['reduced']['max_hours'] if is_reduced else config['work_hours']['normal']['max_hours']
 
@@ -304,68 +430,37 @@ def assign_stops_to_vehicles(stops, vehicles, config, weekday):
 
     assignments = {v.plate: [] for v in non_tiago}
 
-    zone_stops = defaultdict(list)
+    # ── 1. Paragens pre-atribuidas (campo Transportador do input) ──
+    unassigned = []
     for stop in stops:
+        plate = _match_transporter(stop.pre_assigned_plate, non_tiago)
+        if plate:
+            assignments[plate].append(stop)
+        else:
+            unassigned.append(stop)
+
+    # ── 2. Agrupar restantes por zona ──
+    zone_stops = defaultdict(list)
+    for stop in unassigned:
         zone_stops[stop.zone_name].append(stop)
 
-    def _preferred_plates(zone_name):
-        zc = dist_map.get(zone_name, {})
-        preferred = zc.get('preferred_drivers', [])
-        plates = []
-        for dn in preferred:
-            for v in non_tiago:
-                if v.driver == dn:
-                    plates.append(v.plate)
-                    break
-        if not plates:
-            plates = [v.plate for v in non_tiago]
-        return plates
-
-    def _vehicle_load(plate):
-        return sum(s.total_boxes for s in assignments.get(plate, []))
-
-    # Sort zones: small zones first, then big zones that need splitting
-    zone_names = sorted(zone_stops.keys(),
-                        key=lambda z: len(zone_stops[z]))
-
-    max_stops_per_vehicle = len(stops) // len(non_tiago) + 5
+    # ── 3. Atribuir zonas inteiras ao motorista preferencial ──
+    # Zonas maiores primeiro (mais dificeis de colocar depois)
+    zone_names = sorted(zone_stops.keys(), key=lambda z: -len(zone_stops[z]))
 
     for zone_name in zone_names:
         zstops = zone_stops[zone_name]
-        preferred = _preferred_plates(zone_name)
+        best_plate = _find_best_vehicle_for_zone(
+            zone_name, zstops, assignments, non_tiago,
+            dist_map, restrictions, max_zones, config
+        )
+        assignments[best_plate].extend(zstops)
 
-        if len(zstops) <= max_stops_per_vehicle:
-            # Small zone: assign entirely to best preferred vehicle
-            best = min(preferred[:2] or [non_tiago[0].plate],
-                       key=lambda p: _vehicle_load(p))
-            assignments[best].extend(zstops)
-        else:
-            # Large zone: split across multiple vehicles
-            # Sort stops by latitude for geographic clustering
-            zstops.sort(key=lambda s: (s.lat, s.lon))
-            chunk_size = max(1, len(zstops) // len(non_tiago))
+    # ── 4. Reequilibrar: respeitar max_hours + minimizar km totais ──
+    _rebalance_for_efficiency(assignments, non_tiago, config, max_hours,
+                              restrictions)
 
-            # Distribute chunks to vehicles, preferring the preferred ones
-            all_plates = preferred + [p for p in assignments if p not in preferred]
-            chunk_idx = 0
-            for plate in all_plates:
-                if chunk_idx >= len(zstops):
-                    break
-                end = min(chunk_idx + chunk_size, len(zstops))
-                assignments[plate].extend(zstops[chunk_idx:end])
-                chunk_idx = end
-
-            # Remaining stops go to least loaded
-            if chunk_idx < len(zstops):
-                least = min(assignments, key=lambda p: _vehicle_load(p))
-                assignments[least].extend(zstops[chunk_idx:])
-
-    # Reequilibrar agressivamente com apenas 4 viaturas
-    # Varias rondas para tentar encaixar tudo sem o Tiago
-    _rebalance_by_hours(assignments, non_tiago, config, max_hours)
-    _rebalance_by_hours(assignments, non_tiago, config, max_hours)
-
-    # Verificar se ALGUMA viatura excede o limite de horas
+    # ── 5. Verificar se Tiago precisa sair ──
     depot_lat = config['depot']['lat']
     depot_lon = config['depot']['lon']
 
@@ -387,7 +482,7 @@ def assign_stops_to_vehicles(stops, vehicles, config, weekday):
         assignments[tiago.plate] = []
         _redistribute_with_tiago(assignments, non_tiago, tiago, config, max_hours)
     elif tiago:
-        # Tiago nao sai — apenas apoia o motorista mais carregado
+        # Tiago nao sai — apoia o motorista mais carregado
         max_hours_plate = None
         max_h = 0
         for plate, assigned in assignments.items():
@@ -456,50 +551,83 @@ def _estimate_route_hours(stops, depot_lat, depot_lon, config):
     return total_min / 60
 
 
-def _rebalance_by_hours(assignments, vehicles, config, max_hours):
-    """Reequilibra movendo stops de viaturas sobrecarregadas para as mais livres."""
+def _rebalance_for_efficiency(assignments, vehicles, config, max_hours,
+                              restrictions=None):
+    """
+    Reequilibra para minimizar km totais da empresa e respeitar max_hours.
+
+    Fase 1: Resolver viaturas acima de max_hours (mover outliers geograficos)
+    Fase 2: Mover stops que estao mais perto de outra viatura (reduz km totais)
+    """
     depot_lat = config['depot']['lat']
     depot_lon = config['depot']['lon']
     v_map = {v.plate: v for v in vehicles}
+    if restrictions is None:
+        restrictions = config.get('driver_restrictions', {})
 
-    for _ in range(10):
+    for iteration in range(15):
         moved = False
+
+        # Calcular horas de todas as viaturas
         hours = {}
         for plate, stops in assignments.items():
-            hours[plate] = _estimate_route_hours(stops, depot_lat, depot_lon, config) if stops else 0
+            hours[plate] = _estimate_route_hours(
+                stops, depot_lat, depot_lon, config) if stops else 0
 
-        overloaded = [(p, h) for p, h in hours.items() if h > max_hours]
-        if not overloaded:
-            avg_h = sum(hours.values()) / max(len([h for h in hours.values() if h > 0]), 1)
-            overloaded = [(p, h) for p, h in hours.items() if h > avg_h * 1.3 and len(assignments[p]) > 3]
-
-        if not overloaded:
-            break
-
+        # ── Fase 1: Corrigir viaturas sobrecarregadas ──
+        overloaded = [(p, h) for p, h in hours.items()
+                      if h > max_hours and len(assignments[p]) > 1]
         overloaded.sort(key=lambda x: -x[1])
+
         for plate, h in overloaded:
             stops = assignments[plate]
-            if len(stops) <= 2:
+            if len(stops) <= 1:
                 continue
 
-            # Move the stop that's most "out of the way" for this vehicle
-            stops_by_detour = sorted(stops, key=lambda s: -abs(s.lat - depot_lat))
-            for move_stop in stops_by_detour:
-                # Find best recipient
+            # Centroide desta viatura
+            v_lat = sum(s.lat for s in stops) / len(stops)
+            v_lon = sum(s.lon for s in stops) / len(stops)
+
+            # Stops ordenados por distancia ao centroide (outliers primeiro)
+            stops_by_outlier = sorted(stops,
+                key=lambda s: -haversine_km(s.lat, s.lon, v_lat, v_lon))
+
+            for move_stop in stops_by_outlier:
                 best_plate = None
-                best_h = float('inf')
-                for p2, s2 in assignments.items():
+                best_dist = float('inf')
+
+                for p2 in assignments:
                     if p2 == plate:
                         continue
                     v2 = v_map.get(p2)
                     if not v2:
                         continue
-                    new_boxes = sum(s.total_boxes for s in s2) + move_stop.total_boxes
+                    new_boxes = sum(s.total_boxes for s in assignments[p2]) + move_stop.total_boxes
                     if new_boxes > v2.max_boxes:
                         continue
-                    new_h = _estimate_route_hours(s2 + [move_stop], depot_lat, depot_lon, config)
-                    if new_h < best_h and new_h < h:
-                        best_h = new_h
+
+                    # Verificar restricoes do motorista destino
+                    d_restr = restrictions.get(v2.driver, {})
+                    avoid_cities = [c.upper() for c in d_restr.get('avoid_cities', [])]
+                    if move_stop.city and move_stop.city.upper().strip() in avoid_cities:
+                        continue
+
+                    # Distancia do stop ao centroide da viatura destino
+                    if assignments[p2]:
+                        t_lat = sum(s.lat for s in assignments[p2]) / len(assignments[p2])
+                        t_lon = sum(s.lon for s in assignments[p2]) / len(assignments[p2])
+                    else:
+                        t_lat, t_lon = depot_lat, depot_lon
+                    dist_to_target = haversine_km(move_stop.lat, move_stop.lon, t_lat, t_lon)
+
+                    # Nao sobrecarregar o destino
+                    h_target = _estimate_route_hours(
+                        assignments[p2] + [move_stop], depot_lat, depot_lon, config)
+                    if h_target > max_hours and hours.get(p2, 0) <= max_hours:
+                        continue
+
+                    if dist_to_target < best_dist:
+                        best_dist = dist_to_target
                         best_plate = p2
 
                 if best_plate:
@@ -508,90 +636,110 @@ def _rebalance_by_hours(assignments, vehicles, config, max_hours):
                     moved = True
                     break
 
+            if moved:
+                break
+
+        if moved:
+            continue
+
+        # ── Fase 2: Otimizar km — mover stops que ficam melhor noutro veiculo ──
+        for plate in list(assignments.keys()):
+            stops = assignments[plate]
+            if len(stops) <= 2:
+                continue
+
+            v_lat = sum(s.lat for s in stops) / len(stops)
+            v_lon = sum(s.lon for s in stops) / len(stops)
+
+            for move_stop in stops:
+                dist_to_own = haversine_km(move_stop.lat, move_stop.lon, v_lat, v_lon)
+
+                best_target = None
+                best_ratio = 1.0  # So move se distancia ao target < 50% da distancia actual
+
+                for p2 in assignments:
+                    if p2 == plate or not assignments[p2]:
+                        continue
+                    v2 = v_map.get(p2)
+                    if not v2:
+                        continue
+                    new_boxes = sum(s.total_boxes for s in assignments[p2]) + move_stop.total_boxes
+                    if new_boxes > v2.max_boxes:
+                        continue
+
+                    # Restricoes do motorista destino
+                    d_restr = restrictions.get(v2.driver, {})
+                    avoid_cities = [c.upper() for c in d_restr.get('avoid_cities', [])]
+                    if move_stop.city and move_stop.city.upper().strip() in avoid_cities:
+                        continue
+
+                    t_lat = sum(s.lat for s in assignments[p2]) / len(assignments[p2])
+                    t_lon = sum(s.lon for s in assignments[p2]) / len(assignments[p2])
+                    dist_to_target = haversine_km(move_stop.lat, move_stop.lon, t_lat, t_lon)
+
+                    # So mover se fica significativamente mais perto (>50% melhoria)
+                    if dist_to_own > 0.5 and dist_to_target < dist_to_own * 0.5:
+                        h_target = _estimate_route_hours(
+                            assignments[p2] + [move_stop], depot_lat, depot_lon, config)
+                        if h_target <= max_hours:
+                            ratio = dist_to_target / max(dist_to_own, 0.1)
+                            if ratio < best_ratio:
+                                best_ratio = ratio
+                                best_target = p2
+
+                if best_target:
+                    assignments[plate].remove(move_stop)
+                    assignments[best_target].append(move_stop)
+                    moved = True
+                    break
+
+            if moved:
+                break
+
         if not moved:
             break
 
 
 def _redistribute_with_tiago(assignments, non_tiago, tiago, config, max_hours):
-    """Redistribui stops incluindo Tiago para reequilibrar."""
+    """
+    Redistribui stops incluindo Tiago para respeitar max_hours.
+    Tiago recebe paragens do motorista mais sobrecarregado,
+    minimizando km totais da empresa.
+    """
     all_stops = []
     for plate, stops in assignments.items():
         all_stops.extend(stops)
     all_vehicles = non_tiago + [tiago]
 
+    # Limpar tudo e reatribuir
     for v in all_vehicles:
         assignments[v.plate] = []
 
     depot_lat = config['depot']['lat']
     depot_lon = config['depot']['lon']
     dist_map = config.get('distribution_map', {})
+    restrictions = config.get('driver_restrictions', {})
+    max_zones = config.get('max_routes_per_vehicle', 3)
 
-    def _preferred_plates(zone_name):
-        zc = dist_map.get(zone_name, {})
-        preferred = zc.get('preferred_drivers', [])
-        plates = []
-        for dn in preferred:
-            for v in all_vehicles:
-                if v.driver == dn:
-                    plates.append(v.plate)
-                    break
-        return plates or [v.plate for v in all_vehicles]
-
-    # Phase 1: Assign non-splittable zones to preferred drivers
+    # Reagrupar por zona
     zone_stops = defaultdict(list)
     for stop in all_stops:
         zone_stops[stop.zone_name].append(stop)
 
-    target_stops = len(all_stops) / len(all_vehicles)
-    large_zones = {}
-    small_zones = {}
-    for zn, zs in zone_stops.items():
-        if len(zs) > target_stops:
-            large_zones[zn] = zs
-        else:
-            small_zones[zn] = zs
+    # Atribuir zonas inteiras ao motorista preferencial (incluindo Tiago)
+    zone_names = sorted(zone_stops.keys(), key=lambda z: -len(zone_stops[z]))
 
-    # Assign small zones to preferred driver
-    for zn in sorted(small_zones, key=lambda z: -len(small_zones[z])):
-        preferred = _preferred_plates(zn)
-        best = min(preferred[:2] or [all_vehicles[0].plate],
-                   key=lambda p: len(assignments.get(p, [])))
-        assignments[best].extend(small_zones[zn])
+    for zone_name in zone_names:
+        zstops = zone_stops[zone_name]
+        best_plate = _find_best_vehicle_for_zone(
+            zone_name, zstops, assignments, all_vehicles,
+            dist_map, restrictions, max_zones, config
+        )
+        assignments[best_plate].extend(zstops)
 
-    # Phase 2: Split large zones across vehicles with remaining capacity
-    for zn, zstops in large_zones.items():
-        preferred = _preferred_plates(zn)
-        zstops.sort(key=lambda s: (s.lat, s.lon))
-
-        # Determine how many stops each vehicle can still take
-        available = []
-        for v in all_vehicles:
-            current = len(assignments[v.plate])
-            remaining_cap = max(0, int(target_stops * 1.2) - current)
-            if remaining_cap > 0:
-                pref_bonus = 0 if v.plate in preferred else 1
-                available.append((v.plate, remaining_cap, pref_bonus))
-
-        available.sort(key=lambda x: (x[2], -x[1]))
-
-        idx = 0
-        for plate, cap, _ in available:
-            if idx >= len(zstops):
-                break
-            take = min(cap, len(zstops) - idx)
-            # Ensure at least some distribution
-            if take == 0:
-                take = 1
-            assignments[plate].extend(zstops[idx:idx + take])
-            idx += take
-
-        # Leftover goes to least loaded
-        if idx < len(zstops):
-            least = min(all_vehicles, key=lambda v: len(assignments[v.plate]))
-            assignments[least.plate].extend(zstops[idx:])
-
-    # Phase 3: Rebalance by estimated hours
-    _rebalance_by_hours(assignments, all_vehicles, config, max_hours)
+    # Reequilibrar incluindo Tiago
+    _rebalance_for_efficiency(assignments, all_vehicles, config, max_hours,
+                              restrictions)
 
 
 def sequence_stops(stops, depot_lat, depot_lon, home_lat, home_lon, config, weekday=None):
