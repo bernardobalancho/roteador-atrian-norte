@@ -14,6 +14,7 @@ from engine.router import route
 from engine.writer import write_routed_map, write_pre_carga
 from engine.geo import _check_osrm
 from engine.pdf_guide import generate_all_guides_zip
+from engine.map_generator import generate_route_map
 
 
 st.set_page_config(
@@ -407,6 +408,24 @@ def main():
                 mime="application/zip",
                 use_container_width=True,
             )
+
+        st.divider()
+
+        # ── Mapa de rotas ──
+        st.subheader("🗺️ Mapa de rotas")
+        with st.spinner("A gerar mapa com rotas reais..."):
+            map_html = generate_route_map(plans, cfg)
+
+        import streamlit.components.v1 as components
+        components.html(map_html, height=550, scrolling=False)
+
+        st.download_button(
+            label="🗺️ Download mapa (HTML interativo)",
+            data=map_html,
+            file_name=f"MAPA_ROTAS_{res['date_str']}.html",
+            mime="text/html",
+            use_container_width=True,
+        )
 
     else:
         st.info("👆 Faz upload do ficheiro de picking e clica **Calcular Rotas** para começar.")
