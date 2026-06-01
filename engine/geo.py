@@ -1,15 +1,25 @@
 """
 Geocodificacao por codigo postal e calculo de distancias.
 
+Usa Nominatim (OpenStreetMap) para geocodificacao precisa por codigo postal.
 Usa OSRM (Open Source Routing Machine) para distancias e tempos REAIS
 pela estrada, com fallback para haversine se a API nao estiver disponivel.
 
-OSRM usa dados OpenStreetMap — gratuito e sem limite de pedidos.
+Ambos gratuitos e baseados em dados OpenStreetMap.
 """
 import math
 import requests
 import time as _time
 from functools import lru_cache
+
+# ── Nominatim Config (geocodificacao) ──
+NOMINATIM_BASE = "https://nominatim.openstreetmap.org"
+NOMINATIM_HEADERS = {
+    'User-Agent': 'AtrianNorteRouter/1.0 (delivery routing tool)',
+    'Accept-Language': 'pt',
+}
+_nominatim_cache = {}       # {postal_code: (lat, lon)}
+_last_nominatim_call = 0.0  # rate limiting: 1 req/sec
 
 # ── OSRM Config ──
 OSRM_BASE = "https://router.project-osrm.org"
@@ -222,41 +232,152 @@ POSTAL_COORDS = {
 }
 
 
-def geocode_postal(postal_code: str) -> tuple:
+def _format_postal(postal_code):
+    """Formata codigo postal para 4XXX-XXX."""
+    clean = str(postal_code).replace(' ', '').replace('-', '').strip()
+    if not clean or clean == '0':
+        return None
+    if len(clean) >= 7:
+        return f"{clean[:4]}-{clean[4:7]}"
+    elif len(clean) >= 4:
+        return f"{clean[:4]}-{clean[4:].ljust(3, '0')}"
+    return None
+
+
+def _nominatim_rate_limit():
+    """Garante intervalo minimo de 1 segundo entre pedidos Nominatim."""
+    global _last_nominatim_call
+    now = _time.time()
+    elapsed = now - _last_nominatim_call
+    if elapsed < 1.05:
+        _time.sleep(1.05 - elapsed)
+    _last_nominatim_call = _time.time()
+
+
+def _nominatim_search(params):
+    """Faz um pedido ao Nominatim com rate limiting."""
+    _nominatim_rate_limit()
+    try:
+        r = requests.get(
+            f"{NOMINATIM_BASE}/search", params=params,
+            headers=NOMINATIM_HEADERS, timeout=10
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data:
+                return (float(data[0]['lat']), float(data[0]['lon']))
+    except Exception:
+        pass
+    return None
+
+
+def _get_expected_coords(postal_code):
+    """Obtem coordenadas esperadas do dicionario estatico (para validacao)."""
+    clean = str(postal_code).replace('-', '').replace(' ', '')
+    if len(clean) < 4:
+        return None
+    prefix4 = clean[:4]
+    if prefix4 in POSTAL_COORDS:
+        return POSTAL_COORDS[prefix4]
+    prefix3 = clean[:3]
+    for key, coords in POSTAL_COORDS.items():
+        if key[:3] == prefix3:
+            return coords
+    return None
+
+
+def _validate_result(result, expected, max_km=40):
+    """Verifica se o resultado esta a uma distancia razoavel do esperado."""
+    if not expected or not result:
+        return result is not None
+    dist = haversine_km(result[0], result[1], expected[0], expected[1])
+    return dist < max_km
+
+
+def geocode_postal(postal_code: str, city: str = None,
+                   address: str = None) -> tuple:
     """
-    Converte codigo postal em (lat, lon).
-    Tenta o prefixo de 4 digitos. Se nao encontrar, tenta 3 ou 2 digitos.
+    Converte codigo postal + morada em (lat, lon).
+
+    Estrategia (do mais preciso ao menos preciso):
+    1. Pesquisa por morada completa + CP + cidade (precisao ~rua)
+    2. Pesquisa por codigo postal + cidade (precisao ~bairro)
+    3. Dicionario estatico por prefixo 4 digitos (precisao ~concelho)
+
+    Resultados sao validados contra a zona esperada para evitar
+    matches em cidades erradas.
     """
     if not postal_code:
         return (0.0, 0.0)
 
+    pc = _format_postal(postal_code)
+    if not pc:
+        return (0.0, 0.0)
+
+    # Cache key inclui morada para precisao maxima
+    addr_clean = str(address or '').strip()[:60] if address else ''
+    cache_key = f"{pc}|{addr_clean}" if addr_clean else pc
+
+    if cache_key in _nominatim_cache:
+        cached = _nominatim_cache[cache_key]
+        if cached:
+            return cached
+        # cached is None = Nominatim nao encontrou, usar fallback
+
+    expected = _get_expected_coords(postal_code)
+    result = None
+
+    # ── 1. Pesquisa por morada completa (mais precisa) ──
+    if addr_clean and len(addr_clean) > 3:
+        # So usar se parece uma morada (nao um numero/codigo)
+        has_letters = any(c.isalpha() for c in addr_clean)
+        if has_letters:
+            city_str = str(city or '').strip()
+            q = f"{addr_clean}, {pc}, {city_str}, Portugal" if city_str else f"{addr_clean}, {pc}, Portugal"
+            result = _nominatim_search({
+                'q': q, 'format': 'json', 'limit': 1, 'countrycodes': 'pt',
+            })
+            # Validar: esta na zona certa?
+            if result and not _validate_result(result, expected, max_km=35):
+                result = None  # Match errado, descartar
+
+    # ── 2. Pesquisa por codigo postal + cidade ──
+    if not result:
+        city_str = str(city or '').strip()
+        if city_str and city_str != '0':
+            result = _nominatim_search({
+                'postalcode': pc, 'city': city_str,
+                'country': 'Portugal', 'format': 'json', 'limit': 1,
+            })
+            if result and not _validate_result(result, expected, max_km=40):
+                result = None
+
+    # ── 3. Pesquisa so por codigo postal ──
+    if not result:
+        result = _nominatim_search({
+            'postalcode': pc, 'country': 'Portugal',
+            'format': 'json', 'limit': 1,
+        })
+        if result and not _validate_result(result, expected, max_km=50):
+            result = None
+
+    # Guardar no cache (mesmo se None, para nao repetir)
+    _nominatim_cache[cache_key] = result
+
+    if result:
+        return result
+
+    # ── 4. Fallback: dicionario estatico ──
+    if expected:
+        return expected
+
     clean = str(postal_code).replace('-', '').replace(' ', '')
-    if len(clean) < 4:
-        clean = clean.ljust(4, '0')
-
-    prefix4 = clean[:4]
-    if prefix4 in POSTAL_COORDS:
-        return POSTAL_COORDS[prefix4]
-
-    prefix3 = clean[:3]
-    best = None
-    best_diff = 9999
-    for key, coords in POSTAL_COORDS.items():
-        if key[:3] == prefix3:
-            diff = abs(int(key) - int(prefix4))
-            if diff < best_diff:
-                best_diff = diff
-                best = coords
-
-    if best:
-        return best
-
-    prefix2 = clean[:2]
+    prefix2 = clean[:2] if len(clean) >= 2 else ''
     for key, coords in POSTAL_COORDS.items():
         if key[:2] == prefix2:
             return coords
 
-    return (41.15, -8.61)  # fallback: centro do Porto
+    return (41.15, -8.61)  # ultimo fallback: centro do Porto
 
 
 def haversine_km(lat1, lon1, lat2, lon2):

@@ -226,45 +226,50 @@ def main():
         run_button = st.button("🚀 Calcular Rotas", type="primary", use_container_width=True)
 
         if run_button:
-            with st.spinner("A processar encomendas e a calcular rotas..."):
-                try:
-                    input1_path = save_uploaded_file(input1_file)
-                    input2_path = save_uploaded_file(input2_file) if input2_file else None
+            progress_bar = st.progress(0, text="A ler ficheiro de picking...")
+            try:
+                input1_path = save_uploaded_file(input1_file)
+                input2_path = save_uploaded_file(input2_file) if input2_file else None
 
-                    lines, expedition_date = load_picking_map(input1_path)
+                lines, expedition_date = load_picking_map(input1_path)
 
-                    if not expedition_date:
-                        st.error("Não foi possível extrair a data de expedição do ficheiro.")
-                        return
-
-                    route_plans = route(lines, config, expedition_date)
-
-                    date_str = expedition_date.strftime('%Y-%m-%d')
-                    routed_path = tempfile.mktemp(suffix='.xlsx')
-                    precarga_path = tempfile.mktemp(suffix='.xlsx')
-
-                    write_routed_map(route_plans, lines, config, expedition_date, input2_path, routed_path)
-                    write_pre_carga(route_plans, lines, config, expedition_date, precarga_path)
-
-                    st.session_state['results'] = {
-                        'route_plans': route_plans,
-                        'lines': lines,
-                        'expedition_date': expedition_date,
-                        'routed_path': routed_path,
-                        'precarga_path': precarga_path,
-                        'date_str': date_str,
-                        'config': config,
-                    }
-
-                    os.unlink(input1_path)
-                    if input2_path:
-                        os.unlink(input2_path)
-
-                except Exception as e:
-                    st.error(f"Erro no processamento: {str(e)}")
-                    import traceback
-                    st.code(traceback.format_exc())
+                if not expedition_date:
+                    st.error("Não foi possível extrair a data de expedição do ficheiro.")
                     return
+
+                progress_bar.progress(10, text=f"📍 A geocodificar {len(lines)} linhas (Nominatim ~1/seg)...")
+
+                route_plans = route(lines, config, expedition_date)
+                progress_bar.progress(90, text="A gerar ficheiros de output...")
+
+                date_str = expedition_date.strftime('%Y-%m-%d')
+                routed_path = tempfile.mktemp(suffix='.xlsx')
+                precarga_path = tempfile.mktemp(suffix='.xlsx')
+
+                write_routed_map(route_plans, lines, config, expedition_date, input2_path, routed_path)
+                write_pre_carga(route_plans, lines, config, expedition_date, precarga_path)
+
+                st.session_state['results'] = {
+                    'route_plans': route_plans,
+                    'lines': lines,
+                    'expedition_date': expedition_date,
+                    'routed_path': routed_path,
+                    'precarga_path': precarga_path,
+                    'date_str': date_str,
+                    'config': config,
+                }
+
+                os.unlink(input1_path)
+                if input2_path:
+                    os.unlink(input2_path)
+
+                progress_bar.progress(100, text="✅ Rotas calculadas!")
+
+            except Exception as e:
+                st.error(f"Erro no processamento: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+                return
 
     # ── Resultados ──
     if 'results' in st.session_state:

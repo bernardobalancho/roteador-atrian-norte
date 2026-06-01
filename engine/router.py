@@ -217,7 +217,7 @@ def build_stops(lines, config):
     for line in lines:
         key = f"{line.client_code}_{line.shipping_address}"
         if key not in stops_dict:
-            lat, lon = geocode_postal(line.postal_code)
+            lat, lon = geocode_postal(line.postal_code, line.city, line.address1)
             zone = _map_zone(line.route_code, zone_map)
             tw_start, tw_end, tw_text = _extract_time_window(line.address2, line.obs_external)
 
@@ -1031,9 +1031,14 @@ def route(lines, config, expedition_date):
     else:
         print(f"  ⚠️ OSRM: indisponivel — a usar haversine × road_factor como fallback")
 
-    # 1. Construir paragens
+    # 1. Construir paragens (inclui geocodificacao via Nominatim)
+    from .geo import _nominatim_cache
+    cache_before = len(_nominatim_cache)
     stops = build_stops(lines, config)
+    new_geocodes = len(_nominatim_cache) - cache_before
     print(f"  Paragens: {len(stops)} (de {len(lines)} linhas de picking)")
+    if new_geocodes > 0:
+        print(f"  📍 Geocodificacao: {new_geocodes} codigos postais resolvidos via Nominatim")
 
     # 2. Construir frota
     vehicles = build_vehicles(config)
