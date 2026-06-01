@@ -98,24 +98,7 @@ def generate_driver_guide(plan, expedition_date, config):
         pdf.cell(0, 6, '* Tiago Machado apoia nesta rota (-10% tempo descarga)',
                  new_x='LMARGIN', new_y='NEXT')
 
-    pdf.ln(4)
-
-    # ── Mapa da rota ──
-    try:
-        from .map_generator import generate_route_image
-        map_bytes = generate_route_image(plan, config)
-        if map_bytes:
-            pdf.set_font('Helvetica', 'B', 12)
-            pdf.cell(0, 8, 'MAPA DA ROTA', new_x='LMARGIN', new_y='NEXT')
-            pdf.ln(1)
-            # Verificar se ha espaco na pagina (mapa = ~75mm de altura)
-            if pdf.get_y() > 190:
-                pdf.add_page()
-            map_io = io.BytesIO(map_bytes)
-            pdf.image(map_io, x=10, w=190)
-            pdf.ln(4)
-    except Exception:
-        pass  # Se falhar, continuar sem mapa
+    pdf.ln(6)
 
     # ── Tabela de paragens ──
     pdf.set_font('Helvetica', 'B', 12)
@@ -204,6 +187,25 @@ def generate_driver_guide(plan, expedition_date, config):
              new_x='LMARGIN', new_y='NEXT')
     pdf.cell(0, 5, 'Em caso de atraso significativo, contactar o armazem.',
              new_x='LMARGIN', new_y='NEXT')
+
+    # ── Pagina final: mapa da rota ──
+    try:
+        from .map_generator import generate_route_image
+        map_bytes = generate_route_image(plan, config)
+        if map_bytes:
+            pdf.add_page()
+            pdf.set_font('Helvetica', 'B', 14)
+            pdf.cell(0, 8, 'MAPA DA ROTA', align='C', new_x='LMARGIN', new_y='NEXT')
+            pdf.set_font('Helvetica', '', 10)
+            pdf.cell(0, 6,
+                     f'{_safe(plan.vehicle.driver)}  |  {plan.vehicle.plate}  |  '
+                     f'{plan.total_clients} clientes  |  {plan.total_km:.0f} km',
+                     align='C', new_x='LMARGIN', new_y='NEXT')
+            pdf.ln(4)
+            map_io = io.BytesIO(map_bytes)
+            pdf.image(map_io, x=5, w=200)
+    except Exception:
+        pass  # Se falhar, terminar sem pagina de mapa
 
     return pdf.output()
 
