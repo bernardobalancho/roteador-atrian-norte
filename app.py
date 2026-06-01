@@ -432,6 +432,38 @@ def main():
             use_container_width=True,
         )
 
+        # ── Diagnóstico de geocodificação ──
+        with st.expander("🔍 Diagnóstico de geocodificação", expanded=False):
+            from engine.map_generator import _is_valid_coord
+            geo_data = []
+            for plan in plans:
+                for a in plan.stops:
+                    valid = _is_valid_coord(a.stop.lat, a.stop.lon)
+                    geo_data.append({
+                        "Motorista": plan.vehicle.driver,
+                        "Cliente": a.stop.client_name[:25],
+                        "Morada": (a.stop.address1 or '')[:30],
+                        "CP": a.stop.postal_code or '',
+                        "Cidade": a.stop.city or '',
+                        "Lat": round(a.stop.lat, 5),
+                        "Lon": round(a.stop.lon, 5),
+                        "Estado": "✅" if valid else "❌ inválida",
+                    })
+            if geo_data:
+                n_invalid = sum(1 for g in geo_data if "❌" in g["Estado"])
+                if n_invalid > 0:
+                    st.warning(f"⚠️ {n_invalid} paragens com coordenadas inválidas!")
+                else:
+                    st.success(f"✅ Todas as {len(geo_data)} paragens geocodificadas em Portugal")
+
+                # Verificar duplicados (mesmas coordenadas)
+                coords = [(g["Lat"], g["Lon"]) for g in geo_data]
+                unique = len(set(coords))
+                if unique < len(coords):
+                    st.info(f"ℹ️ {len(coords) - unique} paragens partilham coordenadas (podem sobrepor-se no mapa)")
+
+                st.dataframe(geo_data, use_container_width=True, hide_index=True)
+
     else:
         st.info("👆 Faz upload do ficheiro de picking e clica **Calcular Rotas** para começar.")
 
