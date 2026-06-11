@@ -24,7 +24,11 @@ st.set_page_config(
 )
 
 # ── Password Gate ──
-APP_PASSWORD = st.secrets.get("APP_PASSWORD", "atrian2025")
+# st.secrets.get() falha se nao existir .streamlit/secrets.toml — usar try/except
+try:
+    APP_PASSWORD = st.secrets.get("APP_PASSWORD", "atrian2025")
+except Exception:
+    APP_PASSWORD = "atrian2025"
 
 
 def check_password():
@@ -35,10 +39,18 @@ def check_password():
     st.markdown(
         """
         <div style="display:flex; flex-direction:column; align-items:center;
-                    justify-content:center; padding-top:8rem;">
-            <p style="font-size:3rem; margin-bottom:0;">🚛</p>
-            <h2 style="margin-bottom:0.2rem;">Roteador Atrian Norte</h2>
-            <p style="color:#888;">Introduz a password para aceder</p>
+                    justify-content:center; padding-top:6rem;">
+            <div style="width:64px; height:64px; background:#BA0C2F;
+                        border-radius:14px; display:flex; align-items:center;
+                        justify-content:center; font-family:'Montserrat',sans-serif;
+                        font-weight:800; color:white; font-size:1.8rem;
+                        box-shadow: 0 8px 32px rgba(186,12,47,0.30);">A</div>
+            <h2 style="font-family:'Montserrat',sans-serif; font-weight:700;
+                       margin:1.2rem 0 0.2rem 0; color:#E2E2E2;">Atrian Logistics</h2>
+            <p style="font-family:'Hanken Grotesk',sans-serif;
+                      color:#7A7A7A; text-transform:uppercase;
+                      letter-spacing:0.1em; font-size:0.78rem;
+                      margin-bottom:1.6rem;">Roteador Atrian Norte</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -57,52 +69,277 @@ def check_password():
     return False
 
 
-# ── CSS ──
+# ── CSS (Atrian Professional Distribution design system) ──
 st.markdown("""
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
+    /* ── Base tokens ── */
+    :root {
+        --surface-deep: #0A0A0A;
+        --surface-elevated: #1E1E1E;
+        --surface-container: #1E2020;
+        --surface-container-high: #282A2B;
+        --on-surface: #E2E2E2;
+        --on-surface-muted: #ABABAB;
+        --on-surface-dim: #7A7A7A;
+        --brand-red: #BA0C2F;
+        --brand-red-bright: #E11D48;
+        --status-success: #2ECC71;
+        --status-warning: #F1C40F;
+        --outline: #3E3E3E;
+        --outline-soft: rgba(171,136,136,0.12);
+    }
+
+    html, body, [class*="css"], .stApp {
+        font-family: 'Hanken Grotesk', sans-serif !important;
+        background-color: var(--surface-deep) !important;
+        color: var(--on-surface);
+    }
+    h1, h2, h3, h4, h5, h6 {
+        font-family: 'Montserrat', sans-serif !important;
+        font-weight: 600 !important;
+        letter-spacing: -0.01em;
+        color: var(--on-surface) !important;
+    }
+
+    /* ── Topbar / hero ── */
+    .atrian-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.8rem 0 1.4rem 0;
+        border-bottom: 1px solid var(--outline-soft);
+        margin-bottom: 1.6rem;
+    }
+    .atrian-brand {
+        display: flex; align-items: center; gap: 0.8rem;
+    }
+    .atrian-brand-mark {
+        width: 36px; height: 36px;
+        background: var(--brand-red);
+        border-radius: 8px;
+        display: flex; align-items: center; justify-content: center;
+        font-family: 'Montserrat', sans-serif;
+        font-weight: 800;
+        color: white; font-size: 1.1rem;
+    }
+    .atrian-brand-name {
+        font-family: 'Montserrat', sans-serif;
+        font-weight: 700; font-size: 1.05rem;
+        color: var(--on-surface);
+    }
+    .atrian-brand-sub {
+        font-family: 'Hanken Grotesk', sans-serif;
+        font-size: 0.78rem;
+        color: var(--on-surface-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
     .main-title {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #1a1a2e;
-        margin-bottom: 0;
+        font-family: 'Montserrat', sans-serif !important;
+        font-size: 2rem; font-weight: 700;
+        color: var(--on-surface);
+        margin: 0.4rem 0 0.2rem 0;
     }
     .sub-title {
+        font-family: 'Hanken Grotesk', sans-serif;
         font-size: 1rem;
-        color: #666;
-        margin-bottom: 2rem;
+        color: var(--on-surface-muted);
+        margin-bottom: 1.6rem;
     }
-    .metric-card {
-        background: #f8f9fa;
-        border-radius: 10px;
-        padding: 1.2rem;
-        text-align: center;
-        border-left: 4px solid #4472C4;
+
+    /* ── Sidebar ── */
+    section[data-testid="stSidebar"] {
+        background: var(--surface-elevated) !important;
+        border-right: 1px solid var(--outline-soft);
     }
-    .metric-value {
-        font-size: 1.8rem;
-        font-weight: 700;
-        color: #1a1a2e;
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3 {
+        font-family: 'Montserrat', sans-serif !important;
+        font-weight: 600 !important;
+        color: var(--on-surface) !important;
     }
-    .metric-label {
-        font-size: 0.85rem;
-        color: #666;
+    section[data-testid="stSidebar"] .stMarkdown p {
+        color: var(--on-surface-muted);
+        font-size: 0.92rem;
     }
-    .vehicle-card {
-        background: white;
-        border: 1px solid #e0e0e0;
-        border-radius: 8px;
-        padding: 1rem;
-        margin-bottom: 0.8rem;
+
+    /* Sidebar section labels (subheader chip-style) */
+    section[data-testid="stSidebar"] .stHeading h2,
+    section[data-testid="stSidebar"] .stHeading h3 {
+        text-transform: uppercase;
+        font-size: 0.72rem !important;
+        letter-spacing: 0.1em;
+        color: var(--on-surface-muted) !important;
+        font-weight: 600 !important;
+        margin-top: 0.4rem;
     }
-    .status-ok { color: #27ae60; font-weight: 600; }
-    .status-warn { color: #f39c12; font-weight: 600; }
-    .status-error { color: #e74c3c; font-weight: 600; }
-    div[data-testid="stSidebar"] { background: #f0f2f6; }
+
+    /* ── Cards / containers ── */
+    div[data-testid="stMetric"] {
+        background: var(--surface-elevated);
+        border: 1px solid var(--outline-soft);
+        border-radius: 12px;
+        padding: 1rem 1.2rem;
+        transition: border-color 0.15s ease;
+    }
+    div[data-testid="stMetric"]:hover {
+        border-color: var(--brand-red);
+    }
+    div[data-testid="stMetric"] label {
+        font-family: 'Hanken Grotesk', sans-serif !important;
+        text-transform: uppercase;
+        font-size: 0.72rem !important;
+        letter-spacing: 0.08em;
+        color: var(--on-surface-muted) !important;
+    }
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        font-family: 'Montserrat', sans-serif !important;
+        font-weight: 700 !important;
+        font-size: 1.7rem !important;
+        color: var(--on-surface) !important;
+    }
+
+    /* ── Buttons ── */
+    .stButton > button,
     .stDownloadButton > button {
-        width: 100%;
-        background-color: #4472C4;
-        color: white;
+        font-family: 'Montserrat', sans-serif !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.01em;
+        border-radius: 8px !important;
+        padding: 0.6rem 1.2rem !important;
+        border: none !important;
+        transition: filter 0.15s ease, transform 0.05s ease;
     }
+    .stButton > button[kind="primary"],
+    .stDownloadButton > button {
+        background: var(--brand-red) !important;
+        color: white !important;
+        box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset,
+                    0 8px 24px rgba(186, 12, 47, 0.25);
+    }
+    .stButton > button[kind="primary"]:hover,
+    .stDownloadButton > button:hover {
+        filter: brightness(1.08);
+        color: white !important;
+    }
+    .stButton > button[kind="secondary"] {
+        background: transparent !important;
+        color: var(--on-surface) !important;
+        border: 1px solid var(--outline) !important;
+    }
+    .stButton > button[kind="secondary"]:hover {
+        border-color: var(--brand-red) !important;
+        color: var(--on-surface) !important;
+    }
+
+    /* ── Inputs ── */
+    .stTextInput input,
+    .stNumberInput input,
+    .stTextArea textarea {
+        background: var(--surface-container) !important;
+        border: 1px solid var(--outline) !important;
+        border-radius: 8px !important;
+        color: var(--on-surface) !important;
+        font-family: 'Hanken Grotesk', sans-serif !important;
+    }
+    .stTextInput input:focus,
+    .stNumberInput input:focus {
+        border-color: var(--brand-red) !important;
+        box-shadow: 0 0 0 2px rgba(186,12,47,0.18) !important;
+    }
+    .stSlider [data-baseweb="slider"] > div > div { background: var(--brand-red) !important; }
+
+    /* Checkbox */
+    .stCheckbox label p { color: var(--on-surface) !important; font-family: 'Hanken Grotesk', sans-serif !important; }
+
+    /* ── File uploader cards ── */
+    section[data-testid="stFileUploader"] {
+        background: var(--surface-elevated);
+        border: 1px dashed var(--outline);
+        border-radius: 12px;
+        padding: 1rem;
+        transition: border-color 0.15s ease;
+    }
+    section[data-testid="stFileUploader"]:hover {
+        border-color: var(--brand-red);
+    }
+    section[data-testid="stFileUploader"] button {
+        background: transparent !important;
+        border: 1px solid var(--outline) !important;
+        color: var(--on-surface) !important;
+    }
+
+    /* ── Expanders (vehicle detail rows) ── */
+    div[data-testid="stExpander"] {
+        background: var(--surface-elevated);
+        border: 1px solid var(--outline-soft) !important;
+        border-radius: 12px !important;
+        margin-bottom: 0.6rem;
+    }
+    div[data-testid="stExpander"] summary {
+        font-family: 'Hanken Grotesk', sans-serif !important;
+        color: var(--on-surface) !important;
+        padding: 0.4rem 0.6rem;
+    }
+    div[data-testid="stExpander"]:hover {
+        border-color: var(--brand-red) !important;
+    }
+
+    /* ── Status / alert callouts ── */
+    div[data-testid="stAlert"] {
+        background: var(--surface-elevated) !important;
+        border: 1px solid var(--outline-soft) !important;
+        border-radius: 10px !important;
+        color: var(--on-surface) !important;
+    }
+    div[data-testid="stAlert"][data-baseweb="notification"] svg { color: var(--brand-red); }
+
+    /* Pill-shaped success chip used for the OSRM ok message */
+    .atrian-pill {
+        display: inline-flex; align-items: center; gap: 0.4rem;
+        padding: 0.35rem 0.8rem;
+        border-radius: 9999px;
+        font-family: 'Hanken Grotesk', sans-serif;
+        font-size: 0.82rem; font-weight: 600;
+        background: rgba(46, 204, 113, 0.12);
+        color: var(--status-success);
+        border: 1px solid rgba(46, 204, 113, 0.25);
+    }
+    .atrian-pill.warn {
+        background: rgba(241, 196, 15, 0.10);
+        color: var(--status-warning);
+        border-color: rgba(241, 196, 15, 0.25);
+    }
+    .atrian-pill.brand {
+        background: rgba(186, 12, 47, 0.12);
+        color: #ffb3b3;
+        border-color: rgba(186, 12, 47, 0.30);
+    }
+
+    /* ── Dataframe / tables ── */
+    div[data-testid="stDataFrame"] {
+        background: var(--surface-elevated);
+        border: 1px solid var(--outline-soft);
+        border-radius: 10px;
+    }
+
+    /* ── Progress bar ── */
+    .stProgress > div > div > div > div {
+        background-color: var(--brand-red) !important;
+    }
+
+    /* ── Dividers ── */
+    hr {
+        border-color: var(--outline-soft) !important;
+        margin: 1.4rem 0 !important;
+    }
+
+    /* Legacy classes (kept for compat) */
+    .status-ok { color: var(--status-success); font-weight: 600; }
+    .status-warn { color: var(--status-warning); font-weight: 600; }
+    .status-error { color: #ff6b6b; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -132,15 +369,34 @@ def main():
 
     config = load_config()
 
+    # ── Topbar (brand) ──
+    st.markdown("""
+    <div class="atrian-topbar">
+        <div class="atrian-brand">
+            <div class="atrian-brand-mark">A</div>
+            <div>
+                <div class="atrian-brand-name">Atrian Logistics</div>
+                <div class="atrian-brand-sub">Roteador Atrian Norte</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     # ── Header ──
-    st.markdown('<p class="main-title">🚛 Roteador Atrian Norte</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-title">Planeamento de rotas diário — zona Norte de Portugal</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">Planeamento de rotas diário</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-title">Zona Norte de Portugal — distribua a sua logística com precisão e agilidade em tempo real.</p>', unsafe_allow_html=True)
 
     # ── OSRM status ──
     if _check_osrm():
-        st.success("🛰️ OSRM ativo — distâncias e tempos reais pela estrada")
+        st.markdown(
+            '<span class="atrian-pill">● OSRM ativo — distâncias e tempos reais pela estrada</span>',
+            unsafe_allow_html=True
+        )
     else:
-        st.warning("⚠️ OSRM indisponível — a usar estimativa haversine como fallback")
+        st.markdown(
+            '<span class="atrian-pill warn">● OSRM indisponível — a usar estimativa haversine como fallback</span>',
+            unsafe_allow_html=True
+        )
 
     # ── Sidebar: configuração ──
     with st.sidebar:
@@ -237,7 +493,12 @@ def main():
                     st.error("Não foi possível extrair a data de expedição do ficheiro.")
                     return
 
-                progress_bar.progress(10, text=f"📍 A geocodificar {len(lines)} linhas (Nominatim ~1/seg)...")
+                from engine.geo import _nominatim_cache
+                cached_entries = len(_nominatim_cache)
+                if cached_entries > 20:
+                    progress_bar.progress(10, text=f"📍 A calcular rotas... ({cached_entries} endereços em cache — geocodificação rápida)")
+                else:
+                    progress_bar.progress(10, text=f"📍 A geocodificar {len(lines)} linhas (1ª execução — pode demorar ~{len(lines)}s — próximas vezes será rápido)")
 
                 route_plans = route(lines, config, expedition_date)
                 progress_bar.progress(90, text="A gerar ficheiros de output...")
@@ -284,10 +545,46 @@ def main():
         is_reduced = weekday in cfg['work_hours'].get('reduced_days', [])
         max_h = cfg['work_hours']['reduced']['max_hours'] if is_reduced else cfg['work_hours']['normal']['max_hours']
 
-        st.markdown(f"### 📅 Expedição: {exp_date.strftime('%d/%m/%Y')} ({day_name})")
+        st.markdown(
+            f"<h3 style='font-family:Montserrat,sans-serif; font-weight:600; "
+            f"color:var(--on-surface); margin:0.4rem 0;'>"
+            f"Expedição: {exp_date.strftime('%d/%m/%Y')} ({day_name})</h3>",
+            unsafe_allow_html=True
+        )
 
-        if is_reduced:
-            st.info(f"⏰ Dia com horário reduzido — máximo {max_h:.0f}h por motorista")
+        # Linha de aviso de dia reduzido + atalhos rápidos para outputs Excel
+        warn_col, btn1_col, btn2_col = st.columns([2.5, 1, 1])
+        with warn_col:
+            if is_reduced:
+                st.markdown(
+                    f'<span class="atrian-pill brand">● Dia com horário reduzido — máximo {max_h:.0f}h por motorista</span>',
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f'<span class="atrian-pill">● Dia normal — máximo {max_h:.0f}h por motorista</span>',
+                    unsafe_allow_html=True
+                )
+        with btn1_col:
+            with open(res['routed_path'], 'rb') as f:
+                st.download_button(
+                    label="Mapa Picking",
+                    data=f.read(),
+                    file_name=f"MAPA_PICKING_{res['date_str']}_ROTEADO.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key='dl_picking_top',
+                )
+        with btn2_col:
+            with open(res['precarga_path'], 'rb') as f:
+                st.download_button(
+                    label="Mapa Pré-Carga",
+                    data=f.read(),
+                    file_name=f"MAPA_PRE_CARGA_{res['date_str']}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key='dl_precarga_top',
+                )
 
         # ── Métricas globais ──
         total_stops = sum(p.total_clients for p in plans)
@@ -313,14 +610,19 @@ def main():
             st.metric("Km total", f"{total_km:.0f}")
         with m6:
             if violations == 0:
-                st.metric("Janelas", "✅ OK")
+                st.metric("Janelas", "OK", delta="ok", delta_color="normal")
             else:
-                st.metric("Janelas", f"⚠️ {violations}")
+                st.metric("Janelas", f"{violations}", delta="atraso", delta_color="inverse")
 
         st.divider()
 
         # ── Detalhe por viatura ──
-        st.subheader("🚛 Detalhe por viatura")
+        st.markdown(
+            "<h4 style='font-family:Montserrat,sans-serif; font-weight:600; "
+            "color:var(--on-surface); margin:0.8rem 0 0.6rem 0;'>"
+            "Detalhe por viatura</h4>",
+            unsafe_allow_html=True
+        )
 
         for plan in plans:
             if plan.total_clients == 0:
