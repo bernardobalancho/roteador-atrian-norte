@@ -211,7 +211,11 @@ def build_stops(lines, config):
     Uma paragem = combinacao unica de (cliente + end. expedicao).
     """
     zone_map = config.get('zone_map', {})
-    porto_cities = [c.upper() for c in config.get('porto_cities', ['PORTO'])]
+    # Cidades com ajuste de tempo de descarga (Porto: -10%, Lisboa: +5%)
+    # Backward compat: aceita 'special_cities' (novo) ou 'porto_cities' (legacy)
+    special_cities = [c.upper() for c in
+                      config.get('special_cities',
+                                 config.get('porto_cities', ['PORTO']))]
     stops_dict = {}
 
     for line in lines:
@@ -237,7 +241,7 @@ def build_stops(lines, config):
                 time_window_end=tw_end,
                 time_window_text=tw_text,
                 pre_assigned_plate=line.transporter or "",
-                is_porto=line.city.upper().strip() in porto_cities if line.city else False,
+                is_porto=line.city.upper().strip() in special_cities if line.city else False,
             )
 
         stop = stops_dict[key]
@@ -265,10 +269,17 @@ def _calc_unload_time(boxes, config):
 
 def build_vehicles(config):
     """Constroi lista de viaturas a partir do config."""
+    # Nome do motorista de apoio definido top-level (Porto: Tiago Machado, Lisboa: Bruno).
+    # Backward compat: ainda funciona com 'is_tiago: true' na viatura.
+    support_driver_name = (config.get('support_driver') or {}).get('driver_name', '')
+
     vehicles = []
     for v in config['fleet']:
         if not v.get('active', True):
             continue
+        is_support = v.get('is_tiago', False)
+        if support_driver_name and v['driver'] == support_driver_name:
+            is_support = True
         vehicles.append(Vehicle(
             plate=v['plate'],
             driver=v['driver'],
@@ -279,7 +290,7 @@ def build_vehicles(config):
             home_lat=v.get('home_lat', 0),
             home_lon=v.get('home_lon', 0),
             priority=v.get('priority', 99),
-            is_tiago=v.get('is_tiago', False),
+            is_tiago=is_support,
         ))
     vehicles.sort(key=lambda v: v.priority)
     return vehicles
@@ -917,8 +928,20 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
     depot_lat = config['depot']['lat']
     depot_lon = config['depot']['lon']
     rf = config.get('road_factor', 1.35)
-    porto_red = config.get('porto_time_reduction', 0.10)
-    tiago_red = config.get('tiago_support_reduction', 0.10)
+    # Ajuste de tempo de descarga em cidade especial
+    # Porto: -0.10 (reduz 10%), Lisboa: +0.05 (aumenta 5%)
+    # Backward compat com 'porto_time_reduction' (era positivo = redução)
+    if 'city_time_adjustment' in config:
+        city_adj = config['city_time_adjustment']
+    else:
+        city_adj = -config.get('porto_time_reduction', 0.10)
+
+    # Tolerância de imponderáveis aplicada a cada deslocação (Lisboa: +5%)
+    unforeseen_tol = config.get('unforeseen_tolerance', 0.0)
+
+    # Redução adicional quando viatura de apoio ajuda
+    support_red = config.get('support_driver_reduction',
+                             config.get('tiago_support_reduction', 0.10))
 
     # Ajuste individual do motorista (% extra ou menos no tempo total)
     driver_adj = 0.0
@@ -944,6 +967,8 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
         travel *= traffic_mult
         # Aplicar ajuste individual do motorista
         travel *= (1 + driver_adj)
+        # Tolerancia de imponderaveis (Lisboa: +5%)
+        travel *= (1 + unforeseen_tol)
         total_km += dist
 
         arrival_time = current_time + travel
@@ -952,12 +977,14 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
         if stop.time_window_start and arrival_time < stop.time_window_start:
             arrival_time = stop.time_window_start
 
-        # Tempo de descarga com reducoes
+        # Tempo de descarga com ajustes
         unload = stop.unload_minutes
+        # Cidade especial: signed adjustment (Porto: -0.10, Lisboa: +0.05)
         if stop.is_porto:
-            unload *= (1 - porto_red)
+            unload *= (1 + city_adj)
+        # Viatura de apoio: redução adicional
         if tiago_supports:
-            unload *= (1 - tiago_red)
+            unload *= (1 - support_red)
         # Aplicar ajuste individual do motorista a descarga
         unload *= (1 + driver_adj)
 
@@ -989,6 +1016,7 @@ def calculate_route_times(ordered_stops, vehicle, config, weekday,
         last_departure, current_lat, current_lon, vehicle.home_lat, vehicle.home_lon, config)
     home_travel *= traffic_mult
     home_travel *= (1 + driver_adj)
+    home_travel *= (1 + unforeseen_tol)
     total_km += home_dist
     arrival_home = last_departure + home_travel
     total_hours = (arrival_home - start_minutes) / 60

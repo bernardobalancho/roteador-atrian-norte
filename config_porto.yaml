@@ -1,8 +1,11 @@
 # ============================================================
-# CONFIGURACAO DO ROTEADOR ATRIAN NORTE
+# CONFIGURACAO DO ROTEADOR ATRIAN PORTO (Zona Norte)
 # Todos os parametros que mudam por utilizacao estao aqui.
 # Edita este ficheiro — nao precisas de mexer no codigo Python.
 # ============================================================
+
+# Identificacao da regiao (usado no UI e no nome dos outputs)
+region: "Porto"
 
 # --- Armazem de partida ---
 depot:
@@ -37,9 +40,27 @@ unloading:
   extra_minutes: 2        # Por cada intervalo adicional
   interval_size: 5        # Tamanho do intervalo
 
-# --- Reducoes de tempo ---
-porto_time_reduction: 0.10       # -10% no tempo de descarga no Porto
-tiago_support_reduction: 0.10    # -10% adicional quando Tiago apoia
+# --- Ajustes de tempo de descarga em cidades especiais ---
+# Sinal: NEGATIVO reduz, POSITIVO aumenta
+# Porto: -0.10 (reduz 10% em descargas no centro)
+# Lisboa: +0.05 (aumenta 5% por trafego)
+city_time_adjustment: -0.10
+
+# Tolerancia para imponderaveis aplicada a cada deslocacao (Lisboa: 0.05)
+unforeseen_tolerance: 0.0
+
+# Reducao adicional quando viatura de apoio ajuda outro motorista
+support_driver_reduction: 0.10
+
+# ── Backward compat (chaves legacy ainda aceites se as novas nao existirem) ──
+porto_time_reduction: 0.10
+tiago_support_reduction: 0.10
+
+# --- Motorista de apoio (Porto: Tiago Machado; Lisboa: Bruno) ---
+support_driver:
+  driver_name: "Tiago Machado"   # Nome exato como aparece na frota
+  display_name: "Tiago"          # Como aparece em mensagens de UI/PDFs
+  max_hours_threshold: 9.0       # So sai a distribuicao se outros excederem este teto
 
 # --- Combustivel e distancias ---
 fuel:
@@ -219,8 +240,12 @@ distribution_map:
     days: [0, 1, 2, 3, 4, 5]
     preferred_drivers: ["Rui", "Gustavo", "Tiago Machado", "Andre"]
 
-# --- Cidades consideradas "centro do Porto" para ajuste de descarga ---
+# --- Cidades consideradas "centro especial" para ajuste de descarga ---
 # Apenas cidade = "PORTO" (nao Matosinhos, Gaia, Maia, etc.)
+special_cities:
+  - "PORTO"
+
+# Backward compat
 porto_cities:
   - "PORTO"
 

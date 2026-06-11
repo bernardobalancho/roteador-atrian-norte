@@ -251,27 +251,44 @@ def _write_resumo_sheet(wb, route_plans, config, expedition_date):
     max_h = config['work_hours']['reduced']['max_hours'] if is_reduced else config['work_hours']['normal']['max_hours']
     day_name = DAY_NAMES_PT.get(weekday, '')
 
-    tiago_plan = next((p for p in route_plans if p.vehicle.is_tiago), None)
-    tiago_in_dist = tiago_plan is not None and tiago_plan.total_clients > 0
+    support_plan = next((p for p in route_plans if p.vehicle.is_tiago), None)
+    support_in_dist = support_plan is not None and support_plan.total_clients > 0
+
+    # Nome de apoio e descricao da cidade especial (Porto/Lisboa)
+    support_cfg = config.get('support_driver') or {}
+    support_name = support_cfg.get('display_name', 'Tiago')
+    support_red_pct = int(config.get('support_driver_reduction',
+                                      config.get('tiago_support_reduction', 0.10)) * 100)
+    region = config.get('region', 'Porto')
+
+    # Mensagem da cidade especial (signed: Porto reduz, Lisboa aumenta)
+    if 'city_time_adjustment' in config:
+        adj = config['city_time_adjustment']
+    else:
+        adj = -config.get('porto_time_reduction', 0.10)
+    special_cities = config.get('special_cities', config.get('porto_cities', ['PORTO']))
+    city_label = special_cities[0].title() if special_cities else region
+    sign = '+' if adj >= 0 else '-'
+    city_msg = f"{city_label}: {sign}{abs(int(adj*100))}% tempo entrega por cliente"
 
     ws.cell(row=1, column=1,
-            value='RESUMO ROTEADO V FINAL - MAPA PICKING PORTO').font = BOLD_FONT
+            value=f'RESUMO ROTEADO V FINAL - MAPA PICKING {region.upper()}').font = BOLD_FONT
 
     context_parts = [
         f"Data de expedição considerada: {_fmt_date_pt(expedition_date)}",
         f"Chegada ao armazém: {config['work_hours']['normal']['start']} em {config['depot']['name']}",
     ]
-    if tiago_in_dist:
+    if support_in_dist:
         context_parts.append(
-            f"Saída do carro do Tiago validada por limite máximo de {max_h:.0f}h00 "
+            f"Saída do carro do {support_name} validada por limite máximo de {max_h:.0f}h00 "
             f"à {day_name}")
     else:
         for p in route_plans:
             if p.tiago_supports:
                 context_parts.append(
-                    f"Tiago apoia {p.vehicle.driver} (-10% tempo descarga)")
+                    f"{support_name} apoia {p.vehicle.driver} (-{support_red_pct}% tempo descarga)")
                 break
-    context_parts.append("Porto: -10% tempo entrega por cliente")
+    context_parts.append(city_msg)
     ws.cell(row=2, column=1, value=' | '.join(context_parts)).font = DATA_FONT
 
     headers = [
@@ -398,12 +415,21 @@ def _write_motivos_sheet(wb, route_plans, config, expedition_date):
                 value=f"Distribuição em {len(route_plans)} viaturas garante "
                       f"todos os motoristas até {max_h:.0f}h00.")
 
+    # Mensagem da cidade especial (Porto -10%, Lisboa +5%)
+    if 'city_time_adjustment' in config:
+        adj = config['city_time_adjustment']
+    else:
+        adj = -config.get('porto_time_reduction', 0.10)
+    special_cities = config.get('special_cities', config.get('porto_cities', ['PORTO']))
+    city_label = special_cities[0].title() if special_cities else config.get('region', 'Porto')
+    sign = '+' if adj >= 0 else '-'
+    city_msg = f"{city_label} com {sign}{abs(int(adj*100))}% no tempo de entrega por cliente"
+
     ws.cell(row=row, column=4,
             value=f"Observações de entrega limitadas exclusivamente a "
                   f"horários/janelas; hora de início fixa "
                   f"{config['work_hours']['normal']['start']} em "
-                  f"{config['depot']['name']}; Porto com -10% no tempo de "
-                  f"entrega por cliente.")
+                  f"{config['depot']['name']}; {city_msg}.")
 
     _auto_width(ws)
 

@@ -93,9 +93,13 @@ def generate_driver_guide(plan, expedition_date, config):
         pdf.cell(0, 6, value, new_x='LMARGIN', new_y='NEXT')
 
     if plan.tiago_supports:
+        support_name = (config.get('support_driver') or {}).get(
+            'display_name', 'Viatura de apoio')
+        red_pct = int(config.get('support_driver_reduction',
+                                  config.get('tiago_support_reduction', 0.10)) * 100)
         pdf.ln(2)
         pdf.set_font('Helvetica', 'I', 10)
-        pdf.cell(0, 6, '* Tiago Machado apoia nesta rota (-10% tempo descarga)',
+        pdf.cell(0, 6, f'* {support_name} apoia nesta rota (-{red_pct}% tempo descarga)',
                  new_x='LMARGIN', new_y='NEXT')
 
     pdf.ln(6)
