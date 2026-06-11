@@ -7,7 +7,9 @@ pela estrada, com fallback para haversine se a API nao estiver disponivel.
 
 Ambos gratuitos e baseados em dados OpenStreetMap.
 """
+import json
 import math
+import os
 import requests
 import time as _time
 from functools import lru_cache
@@ -18,8 +20,43 @@ NOMINATIM_HEADERS = {
     'User-Agent': 'AtrianNorteRouter/1.0 (delivery routing tool)',
     'Accept-Language': 'pt',
 }
-_nominatim_cache = {}       # {postal_code: (lat, lon)}
+_GEOCACHE_FILE = "/tmp/atrian_geocache.json"
+_nominatim_cache = {}       # {cache_key: (lat, lon) ou None}
 _last_nominatim_call = 0.0  # rate limiting: 1 req/sec
+_geocache_dirty = False     # True quando ha entradas novas nao guardadas
+
+
+def _load_geocache():
+    """Carrega cache de geocodificacao do disco (chamado uma vez ao iniciar)."""
+    global _nominatim_cache
+    try:
+        if os.path.exists(_GEOCACHE_FILE):
+            with open(_GEOCACHE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            # Converter listas [lat, lon] de volta para tuples (JSON nao tem tuples)
+            _nominatim_cache = {
+                k: tuple(v) if isinstance(v, list) else v
+                for k, v in data.items()
+            }
+    except Exception:
+        _nominatim_cache = {}
+
+
+def _save_geocache():
+    """Guarda cache de geocodificacao no disco."""
+    global _geocache_dirty
+    if not _geocache_dirty:
+        return
+    try:
+        with open(_GEOCACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(_nominatim_cache, f, ensure_ascii=False, separators=(',', ':'))
+        _geocache_dirty = False
+    except Exception:
+        pass
+
+
+# Carregar cache persistente ao importar o modulo
+_load_geocache()
 
 # ── OSRM Config ──
 OSRM_BASE = "https://router.project-osrm.org"
@@ -318,11 +355,18 @@ def geocode_postal(postal_code: str, city: str = None,
     addr_clean = str(address or '').strip()[:60] if address else ''
     cache_key = f"{pc}|{addr_clean}" if addr_clean else pc
 
+    # ── Verificar cache (chave completa) ──
     if cache_key in _nominatim_cache:
         cached = _nominatim_cache[cache_key]
         if cached:
             return cached
-        # cached is None = Nominatim nao encontrou, usar fallback
+        # cached is None = Nominatim nao encontrou, usar fallback estático
+
+    # ── Verificar cache por CP simples (fallback rapido) ──
+    # Se o mesmo CP ja foi geocodificado com outra morada, usar esse resultado.
+    # CPs portugueses de 7 digitos identificam areas pequenas (~rua/quarteirao).
+    if addr_clean and pc in _nominatim_cache and _nominatim_cache[pc]:
+        return _nominatim_cache[pc]
 
     expected = _get_expected_coords(postal_code)
     result = None
@@ -361,8 +405,14 @@ def geocode_postal(postal_code: str, city: str = None,
         if result and not _validate_result(result, expected, max_km=50):
             result = None
 
-    # Guardar no cache (mesmo se None, para nao repetir)
+    # Guardar no cache (mesmo se None, para nao repetir) e persistir no disco
+    global _geocache_dirty
     _nominatim_cache[cache_key] = result
+    # Guardar tambem chave CP-simples como fallback para moradas futuras
+    if result and pc not in _nominatim_cache:
+        _nominatim_cache[pc] = result
+    _geocache_dirty = True
+    _save_geocache()
 
     if result:
         return result

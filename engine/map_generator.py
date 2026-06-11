@@ -3,9 +3,13 @@ Gerador de mapas interativos com as rotas dos motoristas.
 Usa Folium (OpenStreetMap) + geometria real do OSRM.
 Usa staticmap para gerar imagens estaticas para PDFs.
 """
+import hashlib
 import io
+import os
 import folium
 import requests
+
+_MAP_CACHE_DIR = "/tmp/atrian_maps"
 
 # Cores distintas para cada motorista
 ROUTE_COLORS = [
@@ -356,6 +360,23 @@ def generate_route_image(plan, config, width=720, height=420):
     depot_lat = config['depot']['lat']
     depot_lon = config['depot']['lon']
 
+    # ── Cache em disco (evita re-download de tiles OSM) ──
+    cache_key_str = (
+        f"{depot_lat},{depot_lon}|"
+        + "|".join(f"{a.stop.lat},{a.stop.lon}" for a in plan.stops)
+        + f"|{plan.vehicle.home_lat},{plan.vehicle.home_lon}"
+        + f"|{width}x{height}"
+    )
+    cache_hash = hashlib.md5(cache_key_str.encode()).hexdigest()
+    cache_path = os.path.join(_MAP_CACHE_DIR, f"{cache_hash}.png")
+
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, 'rb') as f:
+                return f.read()
+        except Exception:
+            pass
+
     # Criar mapa estatico
     m = StaticMap(width, height,
                   url_template='https://tile.openstreetmap.org/{z}/{x}/{y}.png')
@@ -457,4 +478,14 @@ def generate_route_image(plan, config, width=720, height=420):
     # Converter para bytes PNG
     buf = io.BytesIO()
     image.save(buf, format='PNG', optimize=True)
-    return buf.getvalue()
+    png_bytes = buf.getvalue()
+
+    # Guardar em cache no disco
+    try:
+        os.makedirs(_MAP_CACHE_DIR, exist_ok=True)
+        with open(cache_path, 'wb') as f:
+            f.write(png_bytes)
+    except Exception:
+        pass
+
+    return png_bytes
