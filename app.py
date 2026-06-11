@@ -18,7 +18,7 @@ from engine.map_generator import generate_route_map
 
 
 st.set_page_config(
-    page_title="Roteador Atrian Norte",
+    page_title="Atrian Logistics — Roteador",
     page_icon="🚛",
     layout="wide",
 )
@@ -50,7 +50,7 @@ def check_password():
             <p style="font-family:'Hanken Grotesk',sans-serif;
                       color:#7A7A7A; text-transform:uppercase;
                       letter-spacing:0.1em; font-size:0.78rem;
-                      margin-bottom:1.6rem;">Roteador Atrian Norte</p>
+                      margin-bottom:1.6rem;">Roteador de Distribuição</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -344,10 +344,31 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def load_config():
-    config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+def load_config(region: str = "Porto"):
+    """Carrega config_<regiao>.yaml. Fallback para config.yaml legacy."""
+    base = os.path.dirname(__file__)
+    candidates = [
+        os.path.join(base, f'config_{region.lower()}.yaml'),
+        os.path.join(base, 'config.yaml'),       # backward compat
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8') as f:
+                return yaml.safe_load(f)
+    raise FileNotFoundError(f"Nao foi encontrado config para regiao '{region}'")
+
+
+def available_regions():
+    """Devolve a lista de regioes disponiveis (config_X.yaml encontrados)."""
+    base = os.path.dirname(__file__)
+    regions = []
+    for f in os.listdir(base):
+        if f.startswith('config_') and f.endswith('.yaml'):
+            name = f[len('config_'):-len('.yaml')]
+            regions.append(name.capitalize())
+    if not regions and os.path.exists(os.path.join(base, 'config.yaml')):
+        regions = ['Porto']  # legacy fallback
+    return sorted(regions)
 
 
 def save_uploaded_file(uploaded_file):
@@ -367,16 +388,32 @@ def main():
     if not check_password():
         return
 
-    config = load_config()
+    # ── Seletor de regiao (Porto / Lisboa) ──
+    regions = available_regions()
+    default_region = st.session_state.get('region', regions[0] if regions else 'Porto')
+    region = st.sidebar.selectbox(
+        "🌍 Região",
+        regions,
+        index=regions.index(default_region) if default_region in regions else 0,
+        key='region_selector',
+        help="Cada região tem o seu armazém, frota, zonas e regras."
+    )
+    if region != st.session_state.get('region'):
+        st.session_state['region'] = region
+        # Limpa resultados antigos quando muda de regiao
+        st.session_state.pop('results', None)
+
+    config = load_config(region)
+    region_name = config.get('region', region)
 
     # ── Topbar (brand) ──
-    st.markdown("""
+    st.markdown(f"""
     <div class="atrian-topbar">
         <div class="atrian-brand">
             <div class="atrian-brand-mark">A</div>
             <div>
                 <div class="atrian-brand-name">Atrian Logistics</div>
-                <div class="atrian-brand-sub">Roteador Atrian Norte</div>
+                <div class="atrian-brand-sub">Roteador Atrian {region_name}</div>
             </div>
         </div>
     </div>
@@ -384,7 +421,14 @@ def main():
 
     # ── Header ──
     st.markdown('<p class="main-title">Planeamento de rotas diário</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-title">Zona Norte de Portugal — distribua a sua logística com precisão e agilidade em tempo real.</p>', unsafe_allow_html=True)
+    sub_map = {
+        "Porto": "Zona Norte de Portugal — distribua a sua logística com precisão e agilidade em tempo real.",
+        "Lisboa": "Lisboa e Margem Sul — distribua a sua logística com precisão e agilidade em tempo real.",
+    }
+    st.markdown(
+        f'<p class="sub-title">{sub_map.get(region_name, region_name)}</p>',
+        unsafe_allow_html=True
+    )
 
     # ── OSRM status ──
     if _check_osrm():
@@ -518,6 +562,7 @@ def main():
                     'precarga_path': precarga_path,
                     'date_str': date_str,
                     'config': config,
+                    'region': region_name.upper(),
                 }
 
                 os.unlink(input1_path)
@@ -570,7 +615,7 @@ def main():
                 st.download_button(
                     label="Mapa Picking",
                     data=f.read(),
-                    file_name=f"MAPA_PICKING_{res['date_str']}_ROTEADO.xlsx",
+                    file_name=f"MAPA_PICKING_{res.get('region','PORTO')}_{res['date_str']}_ROTEADO.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                     key='dl_picking_top',
@@ -580,7 +625,7 @@ def main():
                 st.download_button(
                     label="Mapa Pré-Carga",
                     data=f.read(),
-                    file_name=f"MAPA_PRE_CARGA_{res['date_str']}.xlsx",
+                    file_name=f"MAPA_PRE_CARGA_{res.get('region','PORTO')}_{res['date_str']}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                     key='dl_precarga_top',
@@ -690,7 +735,7 @@ def main():
                 st.download_button(
                     label=f"📗 Mapa Picking Roteado",
                     data=f.read(),
-                    file_name=f"MAPA_PICKING_{res['date_str']}_ROTEADO.xlsx",
+                    file_name=f"MAPA_PICKING_{res.get('region','PORTO')}_{res['date_str']}_ROTEADO.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                 )
@@ -700,7 +745,7 @@ def main():
                 st.download_button(
                     label=f"📦 Mapa Pré-Carga",
                     data=f.read(),
-                    file_name=f"MAPA_PRE_CARGA_{res['date_str']}.xlsx",
+                    file_name=f"MAPA_PRE_CARGA_{res.get('region','PORTO')}_{res['date_str']}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                 )
@@ -711,7 +756,7 @@ def main():
             st.download_button(
                 label=f"📄 Guias Motoristas ({n_guides} PDFs)",
                 data=guides_zip,
-                file_name=f"GUIAS_MOTORISTAS_{res['date_str']}.zip",
+                file_name=f"GUIAS_MOTORISTAS_{res.get('region','PORTO')}_{res['date_str']}.zip",
                 mime="application/zip",
                 use_container_width=True,
             )
@@ -729,7 +774,7 @@ def main():
         st.download_button(
             label="🗺️ Download mapa (HTML interativo)",
             data=map_html,
-            file_name=f"MAPA_ROTAS_{res['date_str']}.html",
+            file_name=f"MAPA_ROTAS_{res.get('region','PORTO')}_{res['date_str']}.html",
             mime="text/html",
             use_container_width=True,
         )
