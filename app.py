@@ -385,9 +385,6 @@ def format_hours(h):
 
 
 def main():
-    if not check_password():
-        return
-
     # ── Seletor de regiao (Porto / Lisboa) ──
     regions = available_regions()
     default_region = st.session_state.get('region', regions[0] if regions else 'Porto')
@@ -846,5 +843,13 @@ def main():
         st.info("👆 Faz upload do ficheiro de picking e clica **Calcular Rotas** para começar.")
 
 
-if __name__ == '__main__':
-    main()
+# ── Navegação multi-página (st.navigation — API moderna e fiável) ──
+# Gate de autenticação antes de mostrar qualquer página
+if not check_password():
+    st.stop()
+
+_roteador_page = st.Page(main, title="Roteador", icon="🚛", default=True)
+_config_page = st.Page("views/configuracoes.py",
+                       title="Configurações", icon="⚙️")
+
+st.navigation([_roteador_page, _config_page]).run()

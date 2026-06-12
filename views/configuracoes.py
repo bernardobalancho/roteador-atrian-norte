@@ -25,17 +25,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from engine.config_storage import save_config, storage_mode
 
 
-# ── Page config ──
-st.set_page_config(
-    page_title="Configurações — Atrian Logistics",
-    page_icon="⚙️",
-    layout="wide",
-)
+# NOTA: set_page_config e o gate de autenticação são feitos no app.py
+# (entry point com st.navigation). Esta página é executada por nav.run().
 
 # ── Gate: tem de estar autenticado ──
 if not st.session_state.get("authenticated"):
     st.error("🔒 Precisas de fazer login primeiro.")
-    st.page_link("app.py", label="← Voltar ao login", icon="🔙")
     st.stop()
 
 
