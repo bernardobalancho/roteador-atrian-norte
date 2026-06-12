@@ -496,28 +496,18 @@ def main():
     config['road_factor'] = road_factor
     config['porto_time_reduction'] = porto_reduction / 100
 
-    # ── Main content ──
-    col_upload, col_criteria = st.columns(2)
-
-    with col_upload:
-        st.subheader("📋 Mapa de Picking")
-        st.caption("Ficheiro Excel com as encomendas do dia")
-        input1_file = st.file_uploader(
-            "Upload Input 1",
-            type=['xlsx'],
-            key='input1',
-            label_visibility='collapsed'
-        )
-
-    with col_criteria:
-        st.subheader("📊 Critérios (opcional)")
-        st.caption("Ficheiro com critérios, mapa de distribuição e matrículas")
-        input2_file = st.file_uploader(
-            "Upload Input 2",
-            type=['xlsx'],
-            key='input2',
-            label_visibility='collapsed'
-        )
+    # ── Main content: só Input 1 (Mapa de Picking) ──
+    # Os critérios, frota, zonas e restrições vivem agora dentro da app
+    # (config_*.yaml + página "Configurações")
+    st.subheader("📋 Mapa de Picking")
+    st.caption(f"Ficheiro Excel com as encomendas do dia para a região **{region_name}**. "
+               f"Os critérios e mapa de distribuição vêm da página ⚙️ Configurações.")
+    input1_file = st.file_uploader(
+        "Upload Input 1",
+        type=['xlsx'],
+        key='input1',
+        label_visibility='collapsed'
+    )
 
     st.divider()
 
@@ -529,7 +519,7 @@ def main():
             progress_bar = st.progress(0, text="A ler ficheiro de picking...")
             try:
                 input1_path = save_uploaded_file(input1_file)
-                input2_path = save_uploaded_file(input2_file) if input2_file else None
+                input2_path = None  # critérios agora vêm do config interno
 
                 lines, expedition_date = load_picking_map(input1_path)
 
