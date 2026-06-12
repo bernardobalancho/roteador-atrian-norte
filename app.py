@@ -654,6 +654,42 @@ def main():
             else:
                 st.metric("Janelas", f"{violations}", delta="atraso", delta_color="inverse")
 
+        # ── Listagem de violações de janelas horárias ──
+        if violations > 0:
+            with st.expander(
+                f"⚠️ {violations} janela(s) horária(s) violada(s) — clica para ver detalhes",
+                expanded=True
+            ):
+                violation_rows = []
+                for plan in plans:
+                    for a in plan.stops:
+                        if (a.stop.time_window_end
+                                and a.arrival_minutes > a.stop.time_window_end):
+                            delay = a.arrival_minutes - a.stop.time_window_end
+                            tw_end_h = a.stop.time_window_end // 60
+                            tw_end_m = a.stop.time_window_end % 60
+                            violation_rows.append({
+                                "Motorista": plan.vehicle.driver,
+                                "Matrícula": plan.vehicle.plate,
+                                "Cliente": a.stop.client_name[:30],
+                                "Cidade": a.stop.city,
+                                "Janela": a.stop.time_window_text or f"até {tw_end_h:02d}:{tw_end_m:02d}",
+                                "Chegada prevista": a.estimated_arrival,
+                                "Atraso": f"+{delay} min",
+                                "_delay": delay,
+                            })
+                # Ordenar por atraso descendente
+                violation_rows.sort(key=lambda r: -r['_delay'])
+                for r in violation_rows:
+                    r.pop('_delay', None)
+                st.dataframe(violation_rows, use_container_width=True,
+                              hide_index=True)
+                st.caption(
+                    "💡 Dica: se os mesmos clientes aparecem repetidamente, "
+                    "ajusta o **mapa de distribuição** ou as **restrições por motorista** "
+                    "na página ⚙️ Configurações para evitar atribuições incompatíveis."
+                )
+
         st.divider()
 
         # ── Detalhe por viatura ──

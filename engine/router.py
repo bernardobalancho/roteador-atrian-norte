@@ -401,6 +401,16 @@ def _find_best_vehicle_for_zone(zone_name, zstops, assignments, vehicles,
             dist = haversine_km(depot_lat, depot_lon, z_lat, z_lon)
             score += dist * 0.5
 
+        # Pressao de janelas horarias: nao acumular muitas janelas apertadas
+        # numa unica viatura — espalha-as por viaturas com folga.
+        existing_windows = sum(1 for s in assignments[v.plate]
+                                if s.time_window_end is not None)
+        zone_windows = sum(1 for s in zstops if s.time_window_end is not None)
+        if zone_windows > 0:
+            # Penalizar viaturas que ja tem muitas janelas (>4)
+            if existing_windows > 4:
+                score += (existing_windows - 4) * 15
+
         if score < best_score:
             best_score = score
             best_plate = v.plate
@@ -504,7 +514,166 @@ def assign_stops_to_vehicles(stops, vehicles, config, weekday):
                     max_hours_plate = plate
         tiago_supports_plate = max_hours_plate
 
+    # ── 6. Pass de reparacao de janelas horarias ──
+    # Tenta mover stops com janela violada para viaturas que conseguem cumprir.
+    # Nao move paragens pre-atribuidas (constraint dura).
+    active_vehicles = (
+        (non_tiago + [tiago]) if tiago_in_distribution and tiago else non_tiago
+    )
+    _repair_time_windows(assignments, active_vehicles, config, max_hours)
+
     return assignments, tiago_in_distribution, tiago_supports_plate
+
+
+def _estimate_arrival_minutes(stops, depot_lat, depot_lon, config, target_stop):
+    """
+    Estima hora de chegada (em minutos desde meia-noite) a uma paragem especifica
+    dentro de uma rota, usando a sequencia atual de paragens (geografica simples).
+    """
+    if target_stop not in stops:
+        return None
+    wh = config['work_hours']['normal']
+    start_h, start_m = map(int, wh['start'].split(':'))
+    start_minutes = start_h * 60 + start_m
+    lc = config['loading']
+    n = len(stops)
+    load_min = (lc['base_minutes'] +
+                max(0, n - lc['base_clients']) * lc['extra_minutes_per_client'])
+    clock = start_minutes + load_min
+    rf = config.get('road_factor', 1.35)
+
+    # Sequenciar nearest-neighbor a partir do deposito
+    remaining = list(stops)
+    cur_lat, cur_lon = depot_lat, depot_lon
+    while remaining:
+        # Stops com janela primeiro (ordenadas por janela_end)
+        windowed = [s for s in remaining if s.time_window_end is not None]
+        if windowed:
+            best = min(windowed, key=lambda s: s.time_window_end)
+        else:
+            best = min(remaining,
+                       key=lambda s: haversine_km(cur_lat, cur_lon, s.lat, s.lon))
+        d = estimate_distance_km(cur_lat, cur_lon, best.lat, best.lon, rf)
+        t = estimate_travel_minutes(d, cur_lat, cur_lon, best.lat, best.lon, config)
+        clock += t
+        if best.time_window_start and clock < best.time_window_start:
+            clock = best.time_window_start
+        if best is target_stop:
+            return int(clock)
+        clock += best.unload_minutes
+        cur_lat, cur_lon = best.lat, best.lon
+        remaining.remove(best)
+    return None
+
+
+def _find_violations(stops, depot_lat, depot_lon, config):
+    """
+    Devolve lista de (stop, atraso_minutos) para stops cuja janela_end e violada.
+    """
+    violations = []
+    for s in stops:
+        if s.time_window_end is None:
+            continue
+        arrival = _estimate_arrival_minutes(stops, depot_lat, depot_lon, config, s)
+        if arrival is None:
+            continue
+        if arrival > s.time_window_end:
+            violations.append((s, arrival - s.time_window_end))
+    return violations
+
+
+def _repair_time_windows(assignments, vehicles, config, max_hours, max_iterations=8):
+    """
+    Pass de reparacao: tenta mover stops com janela violada para viaturas onde
+    o timing e compativel.
+
+    Estrategia:
+    1. Para cada viatura, identificar stops em violacao
+    2. Para cada violacao, tentar mover para outra viatura onde:
+       - Estimativa de chegada respeita a janela
+       - Capacidade nao excedida
+       - Restricoes do motorista destino OK
+       - Nao excede max_hours
+       - Stop nao e pre-atribuido (constraint dura)
+    3. Repetir ate nao haver melhorias
+    """
+    depot_lat = config['depot']['lat']
+    depot_lon = config['depot']['lon']
+    v_map = {v.plate: v for v in vehicles}
+    restrictions = config.get('driver_restrictions', {})
+
+    for iteration in range(max_iterations):
+        any_fix = False
+
+        # Identificar todas as violacoes ordenadas pela mais grave
+        all_violations = []
+        for plate, stops in assignments.items():
+            if not stops:
+                continue
+            for s, delay in _find_violations(stops, depot_lat, depot_lon, config):
+                if _is_pinned(s, vehicles):
+                    continue  # nao mexer pre-atribuidos
+                all_violations.append((plate, s, delay))
+        all_violations.sort(key=lambda x: -x[2])  # mais graves primeiro
+
+        if not all_violations:
+            break
+
+        for source_plate, stop, delay in all_violations:
+            # Procurar viatura destino que respeite a janela
+            best_target = None
+            best_arrival = None
+
+            for target_plate, target_stops in assignments.items():
+                if target_plate == source_plate:
+                    continue
+                v_target = v_map.get(target_plate)
+                if not v_target:
+                    continue
+
+                # Capacidade
+                new_boxes = sum(s.total_boxes for s in target_stops) + stop.total_boxes
+                if new_boxes > v_target.max_boxes:
+                    continue
+
+                # Restricoes
+                d_restr = restrictions.get(v_target.driver, {})
+                avoid_zones = d_restr.get('avoid_zones', [])
+                avoid_cities = [c.upper() for c in d_restr.get('avoid_cities', [])]
+                if stop.zone_name in avoid_zones:
+                    continue
+                if stop.city and stop.city.upper().strip() in avoid_cities:
+                    continue
+
+                # Estimar tempo de chegada se este stop fosse para esta viatura
+                new_stops = target_stops + [stop]
+                arrival = _estimate_arrival_minutes(
+                    new_stops, depot_lat, depot_lon, config, stop)
+                if arrival is None:
+                    continue
+
+                # Tem de respeitar janela
+                if stop.time_window_end and arrival > stop.time_window_end:
+                    continue
+
+                # Nao pode rebentar max_hours
+                h_target = _estimate_route_hours(
+                    new_stops, depot_lat, depot_lon, config)
+                if h_target > max_hours:
+                    continue
+
+                # Preferir menor folga (mais "apertado") para nao desperdicar capacidade
+                if best_arrival is None or arrival > best_arrival:
+                    best_target = target_plate
+                    best_arrival = arrival
+
+            if best_target:
+                assignments[source_plate].remove(stop)
+                assignments[best_target].append(stop)
+                any_fix = True
+
+        if not any_fix:
+            break
 
 
 def _estimate_route_hours(stops, depot_lat, depot_lon, config):
@@ -562,6 +731,16 @@ def _estimate_route_hours(stops, depot_lat, depot_lon, config):
     return total_min / 60
 
 
+def _is_pinned(stop, vehicles):
+    """
+    True se a paragem tem Transportador pre-atribuido valido a uma viatura.
+    Paragens pinadas NUNCA sao movidas durante rebalanceamento.
+    """
+    if not stop.pre_assigned_plate:
+        return False
+    return _match_transporter(stop.pre_assigned_plate, vehicles) is not None
+
+
 def _rebalance_for_efficiency(assignments, vehicles, config, max_hours,
                               restrictions=None):
     """
@@ -569,6 +748,9 @@ def _rebalance_for_efficiency(assignments, vehicles, config, max_hours,
 
     Fase 1: Resolver viaturas acima de max_hours (mover outliers geograficos)
     Fase 2: Mover stops que estao mais perto de outra viatura (reduz km totais)
+
+    IMPORTANTE: Paragens com Transportador pre-atribuido NUNCA sao movidas
+    (constraint dura — respeita decisao operacional do Excel original).
     """
     depot_lat = config['depot']['lat']
     depot_lon = config['depot']['lon']
@@ -600,8 +782,11 @@ def _rebalance_for_efficiency(assignments, vehicles, config, max_hours,
             v_lon = sum(s.lon for s in stops) / len(stops)
 
             # Stops ordenados por distancia ao centroide (outliers primeiro)
-            stops_by_outlier = sorted(stops,
-                key=lambda s: -haversine_km(s.lat, s.lon, v_lat, v_lon))
+            # IMPORTANTE: nunca considerar paragens pre-atribuidas
+            stops_by_outlier = sorted(
+                [s for s in stops if not _is_pinned(s, vehicles)],
+                key=lambda s: -haversine_km(s.lat, s.lon, v_lat, v_lon)
+            )
 
             for move_stop in stops_by_outlier:
                 best_plate = None
@@ -662,7 +847,8 @@ def _rebalance_for_efficiency(assignments, vehicles, config, max_hours,
             v_lat = sum(s.lat for s in stops) / len(stops)
             v_lon = sum(s.lon for s in stops) / len(stops)
 
-            for move_stop in stops:
+            # IMPORTANTE: paragens pre-atribuidas nao sao candidatas a mover
+            for move_stop in [s for s in stops if not _is_pinned(s, vehicles)]:
                 dist_to_own = haversine_km(move_stop.lat, move_stop.lon, v_lat, v_lon)
 
                 best_target = None
@@ -716,15 +902,32 @@ def _redistribute_with_tiago(assignments, non_tiago, tiago, config, max_hours):
     Redistribui stops incluindo Tiago para respeitar max_hours.
     Tiago recebe paragens do motorista mais sobrecarregado,
     minimizando km totais da empresa.
+
+    IMPORTANTE: paragens com Transportador pre-atribuido mantem-se na viatura
+    original (constraint dura — nunca passam para Tiago).
     """
     all_stops = []
     for plate, stops in assignments.items():
         all_stops.extend(stops)
     all_vehicles = non_tiago + [tiago]
 
+    # Separar paragens pinadas (pre-atribuidas) das que podem mudar
+    pinned_stops = []
+    movable_stops = []
+    for s in all_stops:
+        pinned_plate = _match_transporter(s.pre_assigned_plate, non_tiago)
+        if pinned_plate:
+            pinned_stops.append((s, pinned_plate))
+        else:
+            movable_stops.append(s)
+
     # Limpar tudo e reatribuir
     for v in all_vehicles:
         assignments[v.plate] = []
+
+    # Restaurar paragens pinadas nas viaturas originais
+    for s, p in pinned_stops:
+        assignments[p].append(s)
 
     depot_lat = config['depot']['lat']
     depot_lon = config['depot']['lon']
@@ -732,9 +935,9 @@ def _redistribute_with_tiago(assignments, non_tiago, tiago, config, max_hours):
     restrictions = config.get('driver_restrictions', {})
     max_zones = config.get('max_routes_per_vehicle', 3)
 
-    # Reagrupar por zona
+    # Reagrupar por zona (so as movables)
     zone_stops = defaultdict(list)
-    for stop in all_stops:
+    for stop in movable_stops:
         zone_stops[stop.zone_name].append(stop)
 
     # Atribuir zonas inteiras ao motorista preferencial (incluindo Tiago)
@@ -837,6 +1040,7 @@ def sequence_stops(stops, depot_lat, depot_lon, home_lat, home_lon, config, week
     time_dimension = routing.GetDimensionOrDie('Time')
 
     # Janelas horarias reais convertidas para minutos relativos a saida do armazem
+    # Janelas sao PRIORIDADE MAXIMA — slack minimo e penalidade alta
     for i in range(1, n):
         stop = stops[i-1]
         idx = manager.NodeToIndex(i)
@@ -848,9 +1052,8 @@ def sequence_stops(stops, depot_lat, depot_lon, home_lat, home_lon, config, week
             tw_start_rel = max(0, stop.time_window_start - departure_minutes)
         if stop.time_window_end is not None:
             tw_end_rel = max(0, stop.time_window_end - departure_minutes)
-            # Dar margem de 30 min para o solver encontrar solucao
-            # (melhor chegar um pouco atrasado do que nao ter solucao)
-            tw_end_rel += 30
+            # Margem MINIMA (5 min) so para ruido OSRM/transito, nao para "tolerar atrasos"
+            tw_end_rel += 5
 
         time_dimension.CumulVar(idx).SetRange(tw_start_rel, tw_end_rel)
 
@@ -858,23 +1061,27 @@ def sequence_stops(stops, depot_lat, depot_lon, home_lat, home_lon, config, week
     depot_idx = manager.NodeToIndex(0)
     time_dimension.CumulVar(depot_idx).SetRange(0, 0)
 
-    # Penalizar atrasos em janelas horarias (soft constraint)
+    # Penalizar atrasos em janelas horarias com peso ALTO
+    # Antes: 50 por minuto (frequentemente trocado por menos km)
+    # Agora: 10000 por minuto (1h atraso = 600000 — domina qualquer optimizacao de km)
     for i in range(1, n):
         stop = stops[i-1]
         if stop.time_window_end is not None:
             idx = manager.NodeToIndex(i)
             tw_end_rel = max(0, stop.time_window_end - departure_minutes)
-            # Custo extra por cada minuto de atraso apos a janela
-            time_dimension.SetCumulVarSoftUpperBound(idx, tw_end_rel, 50)
+            time_dimension.SetCumulVarSoftUpperBound(idx, tw_end_rel, 10000)
 
     search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    # Estrategia: comecar por SAVINGS (mais rapida) e melhorar com guided local search.
+    # Janelas horarias sao prioridade — solver vai-as respeitar pelo peso na penalidade.
     search_parameters.first_solution_strategy = (
         routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
     )
     search_parameters.local_search_metaheuristic = (
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     )
-    search_parameters.time_limit.FromSeconds(5)
+    # Mais tempo para encontrar solucao que respeita janelas (era 5s)
+    search_parameters.time_limit.FromSeconds(10)
 
     solution = routing.SolveWithParameters(search_parameters)
 
