@@ -74,47 +74,47 @@ fleet:
 - plate: CE-68-PD
   driver: CARLOS
   active: true
-  max_volume_m3: 10.0
-  max_boxes: 240
   home_city: Lisboa
   home_lat: 38.7223
   home_lon: -9.1393
+  max_volume_m3: 10.0
+  max_boxes: 240
   priority: 1
 - plate: BN-33-TM
   driver: PAULO
   active: true
-  max_volume_m3: 10.0
-  max_boxes: 240
   home_city: Carnaxide
   home_lat: 38.7261
   home_lon: -9.2476
+  max_volume_m3: 10.0
+  max_boxes: 240
   priority: 2
 - plate: BQ-48-FJ
   driver: JOÃO
   active: true
-  max_volume_m3: 10.0
-  max_boxes: 240
   home_city: Odivelas
   home_lat: 38.7937
   home_lon: -9.183
+  max_volume_m3: 10.0
+  max_boxes: 240
   priority: 3
 - plate: BR-13-BE
   driver: TONY
   active: true
-  max_volume_m3: 10.0
-  max_boxes: 240
   home_city: Pinhal Novo - Palmela
   home_lat: 38.6354
   home_lon: -8.9123
+  max_volume_m3: 10.0
+  max_boxes: 240
   priority: 4
 - plate: BI-93-VL
   driver: BRUNO
   active: true
-  max_volume_m3: 10.0
-  max_boxes: 240
   home_city: Bobadela - Loures
   home_lat: 38.8194
   home_lon: -9.0975
+  max_volume_m3: 10.0
+  max_boxes: 240
   priority: 5
 zone_map:
   LISA1Z1: Belem/Alcantara/Estrela/Ajuda
@@ -139,44 +139,72 @@ distribution_map:
     driver_priority:
       BRUNO: 1
       PAULO: 2
+      CARLOS: 3
+      JOÃO: 4
+      TONY: 5
   Benfica/Carnide/Lumiar:
     driver_priority:
       PAULO: 1
       BRUNO: 2
+      CARLOS: 3
+      JOÃO: 4
+      TONY: 5
   Sta Maria Maior/Av Novas/Alvalade/Campolide:
     driver_priority:
       CARLOS: 1
       BRUNO: 2
       PAULO: 3
+      JOÃO: 4
+      TONY: 5
   Olivais/Marvila/Beato/Pq Nacoes:
     driver_priority:
-      TONY: 1
+      JOÃO: 1
       PAULO: 2
+      BRUNO: 2
+      CARLOS: 4
+      TONY: 5
   Lisboa Centro Especial:
     driver_priority:
       PAULO: 1
       CARLOS: 2
       BRUNO: 3
+      JOÃO: 4
+      TONY: 5
   Amadora:
     driver_priority:
-      BRUNO: 1
-      JOÃO: 2
+      JOÃO: 1
+      BRUNO: 2
+      PAULO: 3
+      CARLOS: 5
+      TONY: 5
   Oeiras:
     driver_priority:
       BRUNO: 1
       PAULO: 2
+      CARLOS: 3
+      JOÃO: 4
+      TONY: 5
   Cascais:
     driver_priority:
       BRUNO: 1
       PAULO: 2
+      CARLOS: 3
+      JOÃO: 4
+      TONY: 5
   Sintra/Mafra:
     driver_priority:
       BRUNO: 1
       PAULO: 2
+      JOÃO: 3
+      CARLOS: 4
+      TONY: 5
   Loures/Odivelas:
     driver_priority:
       JOÃO: 1
       BRUNO: 2
+      PAULO: 3
+      CARLOS: 4
+      TONY: 5
   Aeroporto:
     driver_priority:
       JOÃO: 1
@@ -186,26 +214,33 @@ distribution_map:
     driver_priority:
       TONY: 1
       PAULO: 2
+      BRUNO: 3
+      JOÃO: 4
   Sesimbra/Setubal/Palmela/Quinta Anjo:
     driver_priority:
       TONY: 1
       JOÃO: 2
+      BRUNO: 3
   Alcochete/Montijo/Barreiro/Moita:
     driver_priority:
       TONY: 1
-      PAULO: 2
+      JOÃO: 2
+      PAULO: 3
   Pinhal Novo/Poceirao/Marateca:
     driver_priority:
       TONY: 1
       JOÃO: 2
+      BRUNO: 3
   Evora:
     driver_priority:
       TONY: 1
       JOÃO: 2
+      BRUNO: 3
   Comporta/Sines/Troia:
     driver_priority:
       TONY: 1
       JOÃO: 2
+      BRUNO: 3
 special_cities:
 - LISBOA
 max_routes_per_vehicle: 3
