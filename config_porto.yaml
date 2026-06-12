@@ -6,22 +6,22 @@ depot:
 work_hours:
   normal:
     start: 06:30
-    max_hours: 8.5
+    max_hours: 8.0
   reduced:
-    start: 06:30
+    start: 07:00
     max_hours: 5.5
-    end_by: '12:00'
+    end_by: '12:30'
   reduced_days:
   - 0
   - 5
 loading:
-  base_minutes: 40
+  base_minutes: 50
   base_clients: 10
   extra_minutes_per_client: 2
 unloading:
-  base_minutes: 8
+  base_minutes: 9
   threshold_boxes: 5
-  extra_minutes: 2
+  extra_minutes: 3
   interval_size: 5
 city_time_adjustment: -0.1
 unforeseen_tolerance: 0.0
@@ -76,48 +76,47 @@ fleet:
 - plate: AS-04-CB
   driver: Rui
   active: true
-  max_volume_m3: 10.0
-  max_boxes: 220
   home_city: Porto
   home_lat: 41.1579
   home_lon: -8.6291
+  max_volume_m3: 10.0
+  max_boxes: 220
   priority: 1
 - plate: BH-01-QX
   driver: Gustavo
   active: true
-  max_volume_m3: 10.0
-  max_boxes: 220
   home_city: Gondomar
   home_lat: 41.1496
   home_lon: -8.5328
+  max_volume_m3: 10.0
+  max_boxes: 220
   priority: 2
 - plate: BC-04-XV
   driver: Andre
   active: true
-  max_volume_m3: 10.0
-  max_boxes: 220
   home_city: Povoa de Varzim
   home_lat: 41.3833
   home_lon: -8.7667
+  max_volume_m3: 10.0
+  max_boxes: 220
   priority: 3
 - plate: 24-SN-24
   driver: Luis Martins
   active: true
-  max_volume_m3: 8.0
-  max_boxes: 170
   home_city: Matosinhos
   home_lat: 41.1844
   home_lon: -8.6903
+  max_volume_m3: 8.0
+  max_boxes: 170
   priority: 4
 - plate: 83-SI-13
   driver: Tiago Machado
   active: true
-  is_tiago: true
-  max_volume_m3: 6.0
-  max_boxes: 130
   home_city: Gondomar
   home_lat: 41.1496
   home_lon: -8.5328
+  max_volume_m3: 6.0
+  max_boxes: 130
   priority: 5
 zone_map:
   PORZ1E: Porto I (Este)
@@ -145,51 +144,60 @@ distribution_map:
       Andre: 1
       Tiago Machado: 2
       Luis Martins: 3
+      Gustavo: 4
   Matosinhos:
     driver_priority:
       Gustavo: 1
       Tiago Machado: 2
       Luis Martins: 3
+      Andre: 4
   Braga, Barcelos:
     driver_priority:
       Luis Martins: 1
       Gustavo: 2
       Tiago Machado: 3
+      Andre: 4
   Guimaraes, Famalicao, Santo Tirso:
     driver_priority:
-      Gustavo: 1
       Tiago Machado: 2
       Andre: 3
+      Gustavo: 4
   Douro:
     driver_priority:
-      Luis Martins: 1
-      Andre: 2
+      Andre: 1
+      Luis Martins: 2
       Tiago Machado: 3
+      Gustavo: 4
   Porto I (Este):
     driver_priority:
       Rui: 1
       Gustavo: 2
       Tiago Machado: 3
+      Andre: 4
   Porto II (Oeste):
     driver_priority:
       Rui: 1
       Gustavo: 2
       Tiago Machado: 3
+      Andre: 4
   Gaia Litoral:
     driver_priority:
       Andre: 1
       Luis Martins: 2
       Tiago Machado: 3
+      Gustavo: 4
   Aveiro:
     driver_priority:
       Luis Martins: 1
       Andre: 2
       Tiago Machado: 3
+      Gustavo: 4
   Maia, Pacos de Ferreira:
     driver_priority:
       Gustavo: 1
       Luis Martins: 2
       Tiago Machado: 3
+      Andre: 4
   Porto Centro Especial:
     driver_priority:
       Rui: 1
