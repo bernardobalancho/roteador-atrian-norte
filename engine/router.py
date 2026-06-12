@@ -352,7 +352,12 @@ def _find_best_vehicle_for_zone(zone_name, zstops, assignments, vehicles,
     rf = config.get('road_factor', 1.35)
 
     zc = dist_map.get(zone_name, {})
-    preferred = zc.get('preferred_drivers', [])
+    # Prioridade de motorista por zona (1 = melhor, 5 = pior preferencia).
+    # Novo formato: driver_priority {motorista: 1..5}
+    # Backward compat: preferred_drivers (lista ordenada) → prioridade pelo indice
+    driver_prio = zc.get('driver_priority', {}) or {}
+    if not driver_prio and zc.get('preferred_drivers'):
+        driver_prio = {d: i + 1 for i, d in enumerate(zc['preferred_drivers'])}
 
     z_lat = sum(s.lat for s in zstops) / len(zstops)
     z_lon = sum(s.lon for s in zstops) / len(zstops)
@@ -375,10 +380,14 @@ def _find_best_vehicle_for_zone(zone_name, zstops, assignments, vehicles,
 
         score = 0.0
 
-        # Preferencia do motorista para esta zona (peso forte)
-        if v.driver in preferred:
-            idx = preferred.index(v.driver)
-            score += idx * 25
+        # Preferencia do motorista para esta zona (soft constraint).
+        # prioridade 1 → +0 (ideal); prioridade 5 → +100; sem prioridade → +120.
+        # Como qualquer prioridade (max +100) < sem prioridade (+120), os
+        # motoristas indicados sao sempre preferidos, mas nunca e proibido
+        # outro motorista cobrir a zona (continua a ser soft).
+        if v.driver in driver_prio:
+            prio = driver_prio[v.driver]
+            score += (prio - 1) * 25
         else:
             score += 120
 

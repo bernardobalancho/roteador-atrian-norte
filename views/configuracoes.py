@@ -55,9 +55,6 @@ def available_regions():
     return sorted(regions)
 
 
-DAY_NAMES = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom']
-
-
 # ── CSS (alinhar com tema dark da app principal) ──
 st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&family=Hanken+Grotesk:wght@400;500&display=swap" rel="stylesheet">
@@ -366,61 +363,81 @@ with st.expander("🚛 Frota de motoristas", expanded=True):
 
 
 # ============================================================
-# SECÇÃO 5: Mapa de distribuição (zonas × dias × motoristas)
+# SECÇÃO 5: Mapa de prioridades (zonas × motoristas)
 # ============================================================
-with st.expander("📅 Mapa de distribuição (zonas × dias × motoristas)", expanded=True):
-    st.caption("Marca os dias em que cada zona é distribuída e quais motoristas a fazem (por ordem de preferência).")
+with st.expander("🎯 Mapa de prioridades (zonas × motoristas)", expanded=True):
+    st.markdown(
+        "Para cada **zona** (linhas), indica a **prioridade 1–5** de cada "
+        "**motorista** (colunas) para a cobrir:"
+    )
+    st.markdown(
+        "- **1** = motorista ideal para a zona &nbsp;•&nbsp; **5** = última escolha\n"
+        "- Deixa **em branco** se o motorista não deve ser preferido para essa zona\n"
+        "- É uma **preferência** (soft): se for mais eficiente, o algoritmo pode "
+        "na mesma usar outro motorista — não bloqueia ninguém."
+    )
 
     fleet_names = [v['driver'] for v in cfg.get('fleet', [])]
     dm = cfg.get('distribution_map', {})
 
-    zones_df = pd.DataFrame([{
-        'zona': name,
-        'Seg': 0 in info.get('days', []),
-        'Ter': 1 in info.get('days', []),
-        'Qua': 2 in info.get('days', []),
-        'Qui': 3 in info.get('days', []),
-        'Sex': 4 in info.get('days', []),
-        'Sáb': 5 in info.get('days', []),
-        'motoristas': ', '.join(info.get('preferred_drivers', [])),
-    } for name, info in dm.items()])
+    # Construir matriz: uma linha por zona, uma coluna por motorista
+    matrix_rows = []
+    for zone_name, info in dm.items():
+        # Suportar formato novo (driver_priority) e antigo (preferred_drivers)
+        prio = info.get('driver_priority')
+        if not prio and info.get('preferred_drivers'):
+            prio = {d: i + 1 for i, d in enumerate(info['preferred_drivers'])}
+        prio = prio or {}
 
-    edited_zones = st.data_editor(
-        zones_df,
+        row = {'Zona': zone_name}
+        for drv in fleet_names:
+            row[drv] = prio.get(drv, None)
+        matrix_rows.append(row)
+
+    matrix_df = pd.DataFrame(matrix_rows)
+    # Garantir todas as colunas de motoristas existem mesmo sem zonas
+    if matrix_df.empty:
+        matrix_df = pd.DataFrame(columns=['Zona'] + fleet_names)
+
+    # Config das colunas: Zona em texto, cada motorista como número 1-5
+    col_cfg = {
+        'Zona': st.column_config.TextColumn("Zona", required=True, width="large"),
+    }
+    for drv in fleet_names:
+        col_cfg[drv] = st.column_config.NumberColumn(
+            drv, min_value=1, max_value=5, step=1, format="%d",
+            help=f"Prioridade de {drv} para a zona (1=ideal, 5=última escolha; vazio=sem preferência)",
+            width="small",
+        )
+
+    edited_matrix = st.data_editor(
+        matrix_df,
         num_rows='dynamic',
         use_container_width=True,
-        column_config={
-            'zona': st.column_config.TextColumn("Zona", required=True, width="large"),
-            'Seg': st.column_config.CheckboxColumn("Seg"),
-            'Ter': st.column_config.CheckboxColumn("Ter"),
-            'Qua': st.column_config.CheckboxColumn("Qua"),
-            'Qui': st.column_config.CheckboxColumn("Qui"),
-            'Sex': st.column_config.CheckboxColumn("Sex"),
-            'Sáb': st.column_config.CheckboxColumn("Sáb"),
-            'motoristas': st.column_config.TextColumn(
-                "Motoristas preferenciais (por ordem, separados por vírgula)",
-                help="Ex: BRUNO, PAULO — o primeiro tem prioridade", width="large"
-            ),
-        },
-        key='zones_editor',
+        column_config=col_cfg,
+        key='priority_matrix_editor',
         hide_index=True,
     )
 
+    # Reconstruir distribution_map a partir da matriz
     new_dm = {}
-    for _, row in edited_zones.iterrows():
-        zone = str(row.get('zona', '')).strip()
+    for _, row in edited_matrix.iterrows():
+        zone = str(row.get('Zona', '')).strip()
         if not zone:
             continue
-        days = []
-        for idx, day in enumerate(['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']):
-            if row.get(day, False):
-                days.append(idx)
-        drivers = [d.strip() for d in str(row.get('motoristas', '')).split(',')
-                   if d.strip()]
-        new_dm[zone] = {
-            'days': days,
-            'preferred_drivers': drivers,
-        }
+        driver_priority = {}
+        for drv in fleet_names:
+            val = row.get(drv)
+            if val is not None and not (isinstance(val, float) and pd.isna(val)):
+                try:
+                    p = int(val)
+                    if 1 <= p <= 5:
+                        driver_priority[drv] = p
+                except (ValueError, TypeError):
+                    pass
+        # Ordenar por prioridade (1 primeiro) para o YAML ficar legível
+        driver_priority = dict(sorted(driver_priority.items(), key=lambda x: x[1]))
+        new_dm[zone] = {'driver_priority': driver_priority}
     cfg['distribution_map'] = new_dm
 
 

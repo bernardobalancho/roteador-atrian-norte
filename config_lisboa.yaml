@@ -1,281 +1,228 @@
-# ============================================================
-# CONFIGURACAO DO ROTEADOR ATRIAN LISBOA E MARGEM SUL
-# Baseado em "PROMPT BASE CORRIGIDO DEFINITIVO roteador Lisboa v6.docx"
-# e "Input 2 CRITERIOS, CONDICOES E MAPA DE DISTRIBUICAO v Lisboa v6.xlsx"
-# ============================================================
-
-# Identificacao da regiao
-region: "Lisboa"
-
-# --- Armazem de partida ---
+region: Lisboa
 depot:
-  name: "Sarilhos Grandes - Montijo"
-  lat: 38.7060
-  lon: -8.9710
-
-# --- Horarios de trabalho ---
-# Ter-Sex (1-4): inicio 06:30, max 8h
-# Seg (0) + Sab (5): inicio 07:00, max 5h30, fim ate 12:30
+  name: Sarilhos Grandes - Montijo
+  lat: 38.706
+  lon: -8.971
 work_hours:
   normal:
-    start: "06:30"
-    max_hours: 8.0          # 8h ininterruptas (Criterio 5 do xlsx)
+    start: 06:30
+    max_hours: 8.0
   reduced:
-    start: "07:00"          # IMPORTANTE: 07:00 (diferente do Porto!)
+    start: 07:00
     max_hours: 5.5
-    end_by: "12:30"
-  reduced_days: [0, 5]      # 0=segunda, 5=sabado
-
-# --- Tempos de carga no armazem (por viatura) ---
-# 50 min para 10 clientes + 2 min por cada cliente adicional
+    end_by: '12:30'
+  reduced_days:
+  - 0
+  - 5
 loading:
-  base_minutes: 50          # Lisboa: 50 (Porto: 40)
+  base_minutes: 50
   base_clients: 10
   extra_minutes_per_client: 2
-
-# --- Tempo de descarga por cliente ---
-# 9 min se < 5 caixas; +3 min por cada intervalo de 5 caixas acima
 unloading:
-  base_minutes: 9           # Lisboa: 9 (Porto: 8)
+  base_minutes: 9
   threshold_boxes: 5
-  extra_minutes: 3          # Lisboa: +3 (Porto: +2)
+  extra_minutes: 3
   interval_size: 5
-
-# --- Ajuste de tempo de descarga em cidade especial ---
-# Lisboa: +5% (aumenta tempo no centro por causa do transito/estacionamento)
 city_time_adjustment: 0.05
-
-# Tolerancia para imponderaveis aplicada a cada deslocacao (+5%)
 unforeseen_tolerance: 0.05
-
-# Reducao adicional quando viatura de apoio ajuda
-support_driver_reduction: 0.10
-
-# --- Motorista de apoio: Bruno ---
+support_driver_reduction: 0.1
 support_driver:
-  driver_name: "BRUNO"           # nome exato como aparece na frota
-  display_name: "Bruno"
-  max_hours_threshold: 8.0       # so sai se outros excederem 8h (Lisboa)
-
-# --- Combustivel e distancias ---
+  driver_name: BRUNO
+  display_name: Bruno
+  max_hours_threshold: 8.0
 fuel:
   price_per_liter: 1.65
   consumption_per_100km: 7.0
-
 road_factor: 1.35
-
-# --- Perfis de transito por hora (Lisboa tem mais transito) ---
 traffic_profiles:
   bands:
-    - start: "06:00"
-      end: "08:00"
-      urban: 0.15
-      suburban: 0.10
-      intercity: 0.00
-    - start: "08:00"
-      end: "10:00"
-      urban: 0.45              # Lisboa pico maior que Porto
-      suburban: 0.30
-      intercity: 0.20
-    - start: "10:00"
-      end: "12:00"
-      urban: 0.20
-      suburban: 0.10
-      intercity: 0.00
-    - start: "12:00"
-      end: "14:30"
-      urban: 0.25
-      suburban: 0.15
-      intercity: 0.10
-    - start: "14:30"
-      end: "17:00"
-      urban: 0.15
-      suburban: 0.05
-      intercity: 0.00
-    - start: "17:00"
-      end: "20:00"
-      urban: 0.40              # Pico saida Lisboa
-      suburban: 0.30
-      intercity: 0.20
-
-# Velocidades medias — so usadas se OSRM indisponivel
+  - start: 06:00
+    end: 08:00
+    urban: 0.15
+    suburban: 0.1
+    intercity: 0.0
+  - start: 08:00
+    end: '10:00'
+    urban: 0.45
+    suburban: 0.3
+    intercity: 0.2
+  - start: '10:00'
+    end: '12:00'
+    urban: 0.2
+    suburban: 0.1
+    intercity: 0.0
+  - start: '12:00'
+    end: '14:30'
+    urban: 0.25
+    suburban: 0.15
+    intercity: 0.1
+  - start: '14:30'
+    end: '17:00'
+    urban: 0.15
+    suburban: 0.05
+    intercity: 0.0
+  - start: '17:00'
+    end: '20:00'
+    urban: 0.4
+    suburban: 0.3
+    intercity: 0.2
 speed:
-  urban: 25                    # Lisboa mais lenta que Porto
+  urban: 25
   suburban: 45
   intercity: 70
-
-# --- Frota Lisboa (fonte: sheet "matriculas - distribuidor") ---
 fleet:
-  - plate: "CE-68-PD"
-    driver: "CARLOS"
-    active: true
-    max_volume_m3: 10.0
-    max_boxes: 240
-    home_city: "Lisboa"
-    home_lat: 38.7223
-    home_lon: -9.1393
-    priority: 1
-
-  - plate: "BN-33-TM"
-    driver: "PAULO"
-    active: true
-    max_volume_m3: 10.0
-    max_boxes: 240
-    home_city: "Carnaxide"
-    home_lat: 38.7261
-    home_lon: -9.2476
-    priority: 2
-
-  - plate: "BQ-48-FJ"
-    driver: "JOÃO"
-    active: true
-    max_volume_m3: 10.0
-    max_boxes: 240
-    home_city: "Odivelas"
-    home_lat: 38.7937
-    home_lon: -9.1830
-    priority: 3
-
-  - plate: "BR-13-BE"
-    driver: "TONY"
-    active: true
-    max_volume_m3: 10.0
-    max_boxes: 240
-    home_city: "Pinhal Novo - Palmela"
-    home_lat: 38.6354
-    home_lon: -8.9123
-    priority: 4
-
-  # ── BRUNO — Viatura de apoio ──
-  # Nao sai a distribuicao se possivel fazer todos os outros ate 8h
-  # Apoia o motorista com mais horas (-10% no tempo de descarga desse motorista)
-  - plate: "BI-93-VL"
-    driver: "BRUNO"
-    active: true
-    max_volume_m3: 10.0
-    max_boxes: 240
-    home_city: "Bobadela - Loures"
-    home_lat: 38.8194
-    home_lon: -9.0975
-    priority: 5                # so sai se necessario
-
-# --- Mapeamento de zonas (codigo rota no input → nome da zona) ---
-# Ajustar conforme os codigos reais usados nos inputs de Lisboa
+- plate: CE-68-PD
+  driver: CARLOS
+  active: true
+  max_volume_m3: 10.0
+  max_boxes: 240
+  home_city: Lisboa
+  home_lat: 38.7223
+  home_lon: -9.1393
+  priority: 1
+- plate: BN-33-TM
+  driver: PAULO
+  active: true
+  max_volume_m3: 10.0
+  max_boxes: 240
+  home_city: Carnaxide
+  home_lat: 38.7261
+  home_lon: -9.2476
+  priority: 2
+- plate: BQ-48-FJ
+  driver: JOÃO
+  active: true
+  max_volume_m3: 10.0
+  max_boxes: 240
+  home_city: Odivelas
+  home_lat: 38.7937
+  home_lon: -9.183
+  priority: 3
+- plate: BR-13-BE
+  driver: TONY
+  active: true
+  max_volume_m3: 10.0
+  max_boxes: 240
+  home_city: Pinhal Novo - Palmela
+  home_lat: 38.6354
+  home_lon: -8.9123
+  priority: 4
+- plate: BI-93-VL
+  driver: BRUNO
+  active: true
+  max_volume_m3: 10.0
+  max_boxes: 240
+  home_city: Bobadela - Loures
+  home_lat: 38.8194
+  home_lon: -9.0975
+  priority: 5
 zone_map:
-  "LISA1Z1": "Belem/Alcantara/Estrela/Ajuda"
-  "LISA1Z2": "Benfica/Carnide/Lumiar"
-  "LISA1Z3": "Sta Maria Maior/Av Novas/Alvalade/Campolide"
-  "LISA1Z4": "Olivais/Marvila/Beato/Pq Nacoes"
-  "LISCE": "Lisboa Centro Especial"
-  "LISA2": "Amadora"
-  "LISA3": "Oeiras"
-  "LISB1": "Cascais"
-  "LISB2": "Sintra/Mafra"
-  "LISC1": "Loures/Odivelas"
-  "LISAERO": "Aeroporto"
-  "MSZ1": "Almada/Seixal"
-  "MSZ2": "Sesimbra/Setubal/Palmela/Quinta Anjo"
-  "MSZ3": "Alcochete/Montijo/Barreiro/Moita"
-  "MSZ4": "Pinhal Novo/Poceirao/Marateca"
-  "MSZ5": "Evora"
-  "MSTROIA": "Comporta/Sines/Troia"
-
-# --- Mapa de distribuicao (zonas × dias da semana) ---
-# Fonte: sheet "MAPA DE DISTRIBUIÇÃO" Lisboa
-# dias: 0=seg, 1=ter, 2=qua, 3=qui, 4=sex, 5=sab
+  LISA1Z1: Belem/Alcantara/Estrela/Ajuda
+  LISA1Z2: Benfica/Carnide/Lumiar
+  LISA1Z3: Sta Maria Maior/Av Novas/Alvalade/Campolide
+  LISA1Z4: Olivais/Marvila/Beato/Pq Nacoes
+  LISCE: Lisboa Centro Especial
+  LISA2: Amadora
+  LISA3: Oeiras
+  LISB1: Cascais
+  LISB2: Sintra/Mafra
+  LISC1: Loures/Odivelas
+  LISAERO: Aeroporto
+  MSZ1: Almada/Seixal
+  MSZ2: Sesimbra/Setubal/Palmela/Quinta Anjo
+  MSZ3: Alcochete/Montijo/Barreiro/Moita
+  MSZ4: Pinhal Novo/Poceirao/Marateca
+  MSZ5: Evora
+  MSTROIA: Comporta/Sines/Troia
 distribution_map:
-  "Belem/Alcantara/Estrela/Ajuda":
-    days: [0, 1, 2, 3, 5]
-    preferred_drivers: ["BRUNO", "PAULO"]
-
-  "Benfica/Carnide/Lumiar":
-    days: [0, 1, 2, 3, 5]
-    preferred_drivers: ["PAULO", "BRUNO"]
-
-  "Sta Maria Maior/Av Novas/Alvalade/Campolide":
-    days: [0, 2, 3, 4, 5]
-    preferred_drivers: ["CARLOS", "BRUNO", "PAULO"]
-
-  "Olivais/Marvila/Beato/Pq Nacoes":
-    days: [0, 2, 3, 4, 5]
-    preferred_drivers: ["TONY", "PAULO"]
-
-  "Lisboa Centro Especial":
-    days: [1, 4]
-    preferred_drivers: ["PAULO", "CARLOS", "BRUNO"]
-
-  "Amadora":
-    days: [0, 3]
-    preferred_drivers: ["BRUNO", "JOÃO"]
-
-  "Oeiras":
-    days: [0, 3]
-    preferred_drivers: ["BRUNO", "PAULO"]
-
-  "Cascais":
-    days: [1, 4]
-    preferred_drivers: ["BRUNO", "PAULO"]
-
-  "Sintra/Mafra":
-    days: [0, 3]
-    preferred_drivers: ["BRUNO", "PAULO"]
-
-  "Loures/Odivelas":
-    days: [1, 4]
-    preferred_drivers: ["JOÃO", "BRUNO"]
-
-  "Aeroporto":
-    days: [0, 1, 2, 3, 5]
-    preferred_drivers: ["JOÃO", "BRUNO", "PAULO"]
-
-  "Almada/Seixal":
-    days: [1, 4]
-    preferred_drivers: ["TONY", "PAULO"]
-
-  "Sesimbra/Setubal/Palmela/Quinta Anjo":
-    days: [0, 3]
-    preferred_drivers: ["TONY", "JOÃO"]
-
-  "Alcochete/Montijo/Barreiro/Moita":
-    days: [0, 3]
-    preferred_drivers: ["TONY", "PAULO"]
-
-  "Pinhal Novo/Poceirao/Marateca":
-    days: [0, 3]
-    preferred_drivers: ["TONY", "JOÃO"]
-
-  "Evora":
-    days: [2, 5]
-    preferred_drivers: ["TONY", "JOÃO"]
-
-  "Comporta/Sines/Troia":
-    days: [1, 4]
-    preferred_drivers: ["TONY", "JOÃO"]
-
-# --- Cidades consideradas "centro especial" para ajuste de descarga ---
-# Em Lisboa, +5% no centro (transito/estacionamento)
+  Belem/Alcantara/Estrela/Ajuda:
+    driver_priority:
+      BRUNO: 1
+      PAULO: 2
+  Benfica/Carnide/Lumiar:
+    driver_priority:
+      PAULO: 1
+      BRUNO: 2
+  Sta Maria Maior/Av Novas/Alvalade/Campolide:
+    driver_priority:
+      CARLOS: 1
+      BRUNO: 2
+      PAULO: 3
+  Olivais/Marvila/Beato/Pq Nacoes:
+    driver_priority:
+      TONY: 1
+      PAULO: 2
+  Lisboa Centro Especial:
+    driver_priority:
+      PAULO: 1
+      CARLOS: 2
+      BRUNO: 3
+  Amadora:
+    driver_priority:
+      BRUNO: 1
+      JOÃO: 2
+  Oeiras:
+    driver_priority:
+      BRUNO: 1
+      PAULO: 2
+  Cascais:
+    driver_priority:
+      BRUNO: 1
+      PAULO: 2
+  Sintra/Mafra:
+    driver_priority:
+      BRUNO: 1
+      PAULO: 2
+  Loures/Odivelas:
+    driver_priority:
+      JOÃO: 1
+      BRUNO: 2
+  Aeroporto:
+    driver_priority:
+      JOÃO: 1
+      BRUNO: 2
+      PAULO: 3
+  Almada/Seixal:
+    driver_priority:
+      TONY: 1
+      PAULO: 2
+  Sesimbra/Setubal/Palmela/Quinta Anjo:
+    driver_priority:
+      TONY: 1
+      JOÃO: 2
+  Alcochete/Montijo/Barreiro/Moita:
+    driver_priority:
+      TONY: 1
+      PAULO: 2
+  Pinhal Novo/Poceirao/Marateca:
+    driver_priority:
+      TONY: 1
+      JOÃO: 2
+  Evora:
+    driver_priority:
+      TONY: 1
+      JOÃO: 2
+  Comporta/Sines/Troia:
+    driver_priority:
+      TONY: 1
+      JOÃO: 2
 special_cities:
-  - "LISBOA"
-
-# Numero maximo de rotas/zonas por viatura
+- LISBOA
 max_routes_per_vehicle: 3
-
-# --- Restricoes de motoristas (soft constraints — "idealmente") ---
-# TONY: especializado em Margem Sul e Litoral Alentejano — evitar Lisboa norte
-# CARLOS: foco Lisboa Centro — evitar Margem Sul e zonas longe
-# Adicionar mais restricoes conforme aprendizagem operacional
 driver_restrictions:
-  "TONY":
-    avoid_zones: ["Belem/Alcantara/Estrela/Ajuda",
-                  "Benfica/Carnide/Lumiar",
-                  "Loures/Odivelas",
-                  "Sintra/Mafra",
-                  "Amadora",
-                  "Oeiras",
-                  "Cascais"]
-  "CARLOS":
-    avoid_zones: ["Sesimbra/Setubal/Palmela/Quinta Anjo",
-                  "Pinhal Novo/Poceirao/Marateca",
-                  "Evora",
-                  "Comporta/Sines/Troia",
-                  "Sintra/Mafra"]
+  TONY:
+    avoid_zones:
+    - Belem/Alcantara/Estrela/Ajuda
+    - Benfica/Carnide/Lumiar
+    - Loures/Odivelas
+    - Sintra/Mafra
+    - Amadora
+    - Oeiras
+    - Cascais
+  CARLOS:
+    avoid_zones:
+    - Sesimbra/Setubal/Palmela/Quinta Anjo
+    - Pinhal Novo/Poceirao/Marateca
+    - Evora
+    - Comporta/Sines/Troia
+    - Sintra/Mafra
