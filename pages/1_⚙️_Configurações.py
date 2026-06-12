@@ -85,16 +85,51 @@ st.markdown("""
 
 
 # ── Header ──
-st.markdown("## ⚙️ Configurações")
-st.caption("Edita os critérios, frota, zonas e restrições da região. "
-           "Alterações guardadas via GitHub (cloud) ou no disco (local).")
+st.markdown("## ⚙️ Configurações definitivas")
+
+# ── Banner explicativo: diário vs definitivo ──
+st.markdown("""
+<div style="background:#1E1E1E; border:1px solid rgba(186,12,47,0.30);
+            border-left:4px solid #BA0C2F;
+            border-radius:10px; padding:14px 18px; margin:0.5rem 0 1.2rem 0;
+            font-family:'Hanken Grotesk',sans-serif;">
+    <div style="font-family:'Montserrat',sans-serif; font-weight:600;
+                color:#FFB3B3; font-size:0.78rem; text-transform:uppercase;
+                letter-spacing:0.08em; margin-bottom:6px;">
+        📌 ESTA É A CONFIGURAÇÃO BASE — PERMANENTE
+    </div>
+    <div style="color:#E2E2E2; font-size:0.95rem; line-height:1.5;">
+        Alterações aqui são <b>definitivas</b> e ficam gravadas para sempre.<br>
+        Usa esta página quando algo muda <b>de forma permanente</b>:
+        motorista despede-se, nova zona, casa de motorista mudou, etc.<br>
+        <span style="color:#ABABAB;">
+        Para ajustes <b>diários</b> (férias, motorista mais lento hoje, etc.)
+        usa os controlos no menu lateral da página principal.
+        </span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 mode = storage_mode()
 if mode == 'github':
-    st.info(f"💾 Modo de gravação: **GitHub API** — alterações persistem no Streamlit Cloud")
+    st.markdown(
+        '<span style="display:inline-block; background:rgba(46,204,113,0.12); '
+        'color:#2ECC71; padding:4px 12px; border-radius:9999px; '
+        'border:1px solid rgba(46,204,113,0.30); font-size:0.85rem;">'
+        '● GitHub conectado — alterações persistem na cloud'
+        '</span>',
+        unsafe_allow_html=True,
+    )
 else:
-    st.warning(f"💾 Modo de gravação: **Local** — alterações só persistem nesta máquina. "
-               f"Para guardar no Streamlit Cloud, configura `GITHUB_TOKEN` nos secrets.")
+    st.markdown(
+        '<span style="display:inline-block; background:rgba(241,196,15,0.10); '
+        'color:#F1C40F; padding:4px 12px; border-radius:9999px; '
+        'border:1px solid rgba(241,196,15,0.25); font-size:0.85rem;">'
+        '● Modo local — alterações só ficam nesta máquina '
+        '(ver SETUP_GITHUB_TOKEN.md para ativar cloud)'
+        '</span>',
+        unsafe_allow_html=True,
+    )
 
 
 # ── Region selector ──
@@ -450,57 +485,171 @@ with st.expander("🚫 Restrições por motorista", expanded=False):
 
 
 # ============================================================
-# SECÇÃO 7: Diff & Save
+# SECÇÃO 7: Diff & Save (confirmação em 2 passos)
 # ============================================================
+import io
+import difflib
+
 st.divider()
-st.markdown("### 💾 Guardar alterações")
 
 # Calcular se há mudanças
-import io
 buf_a = io.StringIO()
 buf_b = io.StringIO()
 yaml.safe_dump(original, buf_a, allow_unicode=True, sort_keys=False)
 yaml.safe_dump(cfg, buf_b, allow_unicode=True, sort_keys=False)
-has_changes = buf_a.getvalue() != buf_b.getvalue()
+old_yaml = buf_a.getvalue()
+new_yaml = buf_b.getvalue()
+has_changes = old_yaml != new_yaml
 
-c1, c2, c3 = st.columns([2, 1, 1])
-with c1:
-    if has_changes:
-        st.warning("⚠️ Há alterações por guardar.")
+
+def _summarize_changes(old, new):
+    """Sumariza diferenças em linguagem natural simples."""
+    summary = []
+    # Frota
+    old_drivers = {v['driver']: v for v in old.get('fleet', [])}
+    new_drivers = {v['driver']: v for v in new.get('fleet', [])}
+    added = set(new_drivers) - set(old_drivers)
+    removed = set(old_drivers) - set(new_drivers)
+    for d in added:
+        summary.append(f"➕ **Motorista adicionado:** {d} ({new_drivers[d].get('plate', '')})")
+    for d in removed:
+        summary.append(f"➖ **Motorista removido:** {d} ({old_drivers[d].get('plate', '')})")
+    for d in set(old_drivers) & set(new_drivers):
+        if old_drivers[d] != new_drivers[d]:
+            summary.append(f"✏️ **Motorista alterado:** {d}")
+    # Armazem
+    if old.get('depot') != new.get('depot'):
+        summary.append(f"🏢 **Armazém alterado**")
+    # Zonas
+    old_zones = set(old.get('distribution_map', {}).keys())
+    new_zones = set(new.get('distribution_map', {}).keys())
+    for z in new_zones - old_zones:
+        summary.append(f"➕ **Zona adicionada:** {z}")
+    for z in old_zones - new_zones:
+        summary.append(f"➖ **Zona removida:** {z}")
+    zones_changed = [z for z in old_zones & new_zones
+                     if old['distribution_map'][z] != new['distribution_map'][z]]
+    if zones_changed:
+        summary.append(f"✏️ **{len(zones_changed)} zona(s) alterada(s):** {', '.join(zones_changed[:3])}"
+                       + ("..." if len(zones_changed) > 3 else ""))
+    # Restricoes
+    if old.get('driver_restrictions') != new.get('driver_restrictions'):
+        summary.append("🚫 **Restrições por motorista alteradas**")
+    # Tempos / horas
+    for k in ['work_hours', 'loading', 'unloading',
+              'city_time_adjustment', 'unforeseen_tolerance',
+              'support_driver_reduction', 'support_driver',
+              'special_cities']:
+        if old.get(k) != new.get(k):
+            label_map = {
+                'work_hours': '⏱️ Horários de trabalho',
+                'loading': '📦 Tempo de carga',
+                'unloading': '🚚 Tempo de descarga',
+                'city_time_adjustment': '🏙️ Ajuste cidade especial',
+                'unforeseen_tolerance': '🚧 Tolerância imponderáveis',
+                'support_driver_reduction': '🤝 Redução motorista apoio',
+                'support_driver': '👤 Motorista de apoio',
+                'special_cities': '🌆 Cidades especiais',
+            }
+            summary.append(f"{label_map.get(k, k)} **alterado**")
+    return summary
+
+
+# ── Header da secção save ──
+if has_changes:
+    st.markdown(
+        "<h3 style='color:#FFB3B3;'>⚠️ Há alterações por guardar como definitivas</h3>",
+        unsafe_allow_html=True
+    )
+    summary = _summarize_changes(original, cfg)
+    if summary:
+        st.markdown("**Resumo das mudanças:**")
+        for s in summary:
+            st.markdown(f"- {s}")
+else:
+    st.markdown(
+        "<h3 style='color:#2ECC71;'>✅ Sem alterações pendentes</h3>",
+        unsafe_allow_html=True
+    )
+    st.caption("A configuração atual em memória é igual à gravada em disco/GitHub.")
+
+st.markdown("")
+
+# ── Estado de confirmação em 2 passos ──
+confirm_key = f'confirm_save_{current_region}'
+
+if has_changes:
+    if not st.session_state.get(confirm_key, False):
+        # PASSO 1: Pedir confirmação
+        c1, c2 = st.columns([1, 1.4])
+        with c1:
+            if st.button("🔄 Descartar todas as alterações",
+                          use_container_width=True):
+                st.session_state.pop(state_key, None)
+                st.session_state.pop(confirm_key, None)
+                st.rerun()
+        with c2:
+            if st.button("📌 Marcar como definitivo…",
+                          type="primary", use_container_width=True):
+                st.session_state[confirm_key] = True
+                st.rerun()
     else:
-        st.success("✅ Sem alterações pendentes.")
+        # PASSO 2: Confirmação final
+        st.error("**Confirma: queres gravar estas alterações DEFINITIVAMENTE?**\n\n"
+                 "A configuração atual será substituída e ficará gravada para todos.")
 
-with c2:
-    if st.button("🔄 Descartar alterações", use_container_width=True,
-                  disabled=not has_changes):
-        st.session_state.pop(state_key, None)
-        st.rerun()
+        # Mostrar diff visual lado-a-lado
+        with st.expander("👀 Ver diff completo (antes / depois)", expanded=False):
+            diff = difflib.unified_diff(
+                old_yaml.splitlines(),
+                new_yaml.splitlines(),
+                fromfile=f'config_{current_region.lower()}.yaml (atual)',
+                tofile=f'config_{current_region.lower()}.yaml (novo)',
+                lineterm=''
+            )
+            diff_text = '\n'.join(diff)
+            if diff_text.strip():
+                st.code(diff_text, language='diff')
+            else:
+                st.caption("Sem diferenças textuais (raro — provavelmente só re-ordenação).")
 
-with c3:
-    if st.button("💾 Guardar", type="primary", use_container_width=True,
-                  disabled=not has_changes):
-        with st.spinner(f"A guardar config_{current_region.lower()}.yaml..."):
-            result = save_config(current_region, cfg, user_label="Atrian UI")
-        if result['success']:
-            st.success(f"✅ {result['message']}")
-            if result.get('commit_url'):
-                st.markdown(f"🔗 [Ver commit no GitHub]({result['commit_url']})")
-            st.balloons()
-        else:
-            st.error(f"❌ {result['message']}")
+        c1, c2 = st.columns([1, 1.4])
+        with c1:
+            if st.button("◀ Voltar atrás", use_container_width=True):
+                st.session_state[confirm_key] = False
+                st.rerun()
+        with c2:
+            if st.button("✅ SIM, GRAVAR DEFINITIVAMENTE",
+                          type="primary", use_container_width=True):
+                with st.spinner(
+                    f"A gravar config_{current_region.lower()}.yaml..."
+                ):
+                    result = save_config(
+                        current_region, cfg, user_label="Atrian UI"
+                    )
+                if result['success']:
+                    st.success(f"✅ {result['message']}")
+                    if result.get('commit_url'):
+                        st.markdown(
+                            f"🔗 [Ver commit no GitHub]({result['commit_url']})"
+                        )
+                    st.balloons()
+                    # Limpar estado de edicao para recarregar do disco
+                    st.session_state.pop(state_key, None)
+                    st.session_state.pop(confirm_key, None)
+                else:
+                    st.error(f"❌ {result['message']}")
+                    st.session_state[confirm_key] = False
 
 
 # ── Preview YAML final ──
-with st.expander("📄 Preview do YAML que será guardado", expanded=False):
-    st.code(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False,
-                           default_flow_style=False, indent=2),
-            language='yaml')
+with st.expander("📄 Preview do YAML final (após gravação)", expanded=False):
+    st.code(new_yaml, language='yaml')
 
-with st.expander("📥 Download como ficheiro YAML", expanded=False):
+with st.expander("📥 Backup: download como ficheiro YAML", expanded=False):
     st.download_button(
         f"⬇️ Download config_{current_region.lower()}.yaml",
-        data=yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False,
-                            default_flow_style=False, indent=2),
+        data=new_yaml,
         file_name=f"config_{current_region.lower()}.yaml",
         mime="application/x-yaml",
         use_container_width=True,

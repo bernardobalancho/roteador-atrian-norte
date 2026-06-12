@@ -442,11 +442,16 @@ def main():
             unsafe_allow_html=True
         )
 
-    # ── Sidebar: configuração ──
+    # ── Sidebar: configuração diária ──
     with st.sidebar:
-        st.header("⚙️ Configuração")
+        st.header("📅 Ajustes do dia")
+        st.caption(
+            "Ajustes **temporários** para o dia (férias, motorista mais lento, etc.). "
+            "Para mudanças permanentes (motorista despede-se, nova zona…) "
+            "usa a página **⚙️ Configurações**."
+        )
 
-        st.subheader("Frota ativa")
+        st.subheader("Frota ativa hoje")
         fleet_active = {}
         driver_adjustments = {}
         for v in config['fleet']:
