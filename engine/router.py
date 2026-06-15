@@ -750,234 +750,305 @@ def _is_pinned(stop, vehicles):
     return _match_transporter(stop.pre_assigned_plate, vehicles) is not None
 
 
-def _rebalance_for_efficiency(assignments, vehicles, config, max_hours,
-                              restrictions=None):
+def _km_of(stops, depot_lat, depot_lon, config):
+    """Km estimados de uma rota (0 se vazia)."""
+    return _estimate_route_km(stops, depot_lat, depot_lon, config) if stops else 0.0
+
+
+def _city_blocked(stops, driver, restrictions):
+    """True se algum stop esta numa cidade que o motorista deve evitar."""
+    avoid = [c.upper() for c in restrictions.get(driver, {}).get('avoid_cities', [])]
+    if not avoid:
+        return False
+    return any(s.city and s.city.upper().strip() in avoid for s in stops)
+
+
+def _move_blocked(stops, zone, driver, restrictions):
     """
-    Reequilibra para minimizar km totais da empresa e respeitar max_hours.
-
-    Fase 1: Resolver viaturas acima de max_hours (mover outliers geograficos)
-    Fase 2: Mover stops que estao mais perto de outra viatura (reduz km totais)
-
-    IMPORTANTE: Paragens com Transportador pre-atribuido NUNCA sao movidas
-    (constraint dura — respeita decisao operacional do Excel original).
+    True se mover esta zona/stops para o motorista viola uma restricao:
+    - zona nas avoid_zones do motorista, OU
+    - algum stop numa cidade nas avoid_cities.
+    Usado nos movimentos de ZONA INTEIRA (otimizacoes opcionais), onde as
+    restricoes sao tratadas como bloqueio duro (nunca empurrar uma zona para
+    um motorista que a deve evitar).
     """
-    depot_lat = config['depot']['lat']
-    depot_lon = config['depot']['lon']
-    v_map = {v.plate: v for v in vehicles}
-    if restrictions is None:
-        restrictions = config.get('driver_restrictions', {})
+    r = restrictions.get(driver, {})
+    if zone in r.get('avoid_zones', []):
+        return True
+    return _city_blocked(stops, driver, restrictions)
 
-    for iteration in range(15):
-        moved = False
 
-        # Calcular horas de todas as viaturas
-        hours = {}
+def _distinct_zones_after(stops, new_zone):
+    """Numero de zonas distintas numa viatura apos adicionar new_zone."""
+    zs = set(s.zone_name for s in stops)
+    zs.add(new_zone)
+    return len(zs)
+
+
+def _consolidate_split_zones(assignments, vehicles, v_map, config, max_hours,
+                             restrictions, depot_lat, depot_lon):
+    """
+    Junta cada zona dividida por varias viaturas numa so (a "ancora"), desde
+    que essa viatura aguente a zona inteira (capacidade + max_hours).
+
+    Regra de negocio: se um motorista vai a uma zona, deve fazer as entregas
+    TODAS dessa zona — nao faz sentido dois motoristas irem a mesma zona se um
+    consegue cobri-la (sobretudo zonas afastadas com poucas encomendas).
+
+    Split legitimo (fica como esta):
+    - Zona com pre-atribuicoes (pinned) em viaturas diferentes
+    - Nenhuma viatura aguenta a zona inteira dentro de max_hours/capacidade
+    """
+    for _ in range(40):
+        zone_loc = defaultdict(lambda: defaultdict(list))
         for plate, stops in assignments.items():
-            hours[plate] = _estimate_route_hours(
-                stops, depot_lat, depot_lon, config) if stops else 0
+            for s in stops:
+                zone_loc[s.zone_name][plate].append(s)
 
-        # ── Fase 1: Corrigir viaturas sobrecarregadas ──
-        overloaded = [(p, h) for p, h in hours.items()
-                      if h > max_hours and len(assignments[p]) > 1]
-        overloaded.sort(key=lambda x: -x[1])
+        did = False
+        for zone, by_plate in zone_loc.items():
+            if len(by_plate) < 2:
+                continue  # nao esta dividida
 
-        for plate, h in overloaded:
-            stops = assignments[plate]
-            if len(stops) <= 1:
+            pinned_plates = [p for p, ss in by_plate.items()
+                             if any(_is_pinned(s, vehicles) for s in ss)]
+            if len(pinned_plates) > 1:
+                continue  # dividida por pre-atribuicoes — respeitar
+
+            # ancora: viatura com pinned desta zona; senao a que tem mais stops
+            if pinned_plates:
+                anchor = pinned_plates[0]
+            else:
+                anchor = max(by_plate, key=lambda p: len(by_plate[p]))
+
+            v_anchor = v_map.get(anchor)
+            if not v_anchor:
                 continue
 
-            # Centroide desta viatura
-            v_lat = sum(s.lat for s in stops) / len(stops)
-            v_lon = sum(s.lon for s in stops) / len(stops)
-
-            # Stops ordenados por distancia ao centroide (outliers primeiro)
-            # IMPORTANTE: nunca considerar paragens pre-atribuidas
-            stops_by_outlier = sorted(
-                [s for s in stops if not _is_pinned(s, vehicles)],
-                key=lambda s: -haversine_km(s.lat, s.lon, v_lat, v_lon)
-            )
-
-            for move_stop in stops_by_outlier:
-                best_plate = None
-                best_dist = float('inf')
-
-                for p2 in assignments:
-                    if p2 == plate:
-                        continue
-                    v2 = v_map.get(p2)
-                    if not v2:
-                        continue
-                    new_boxes = sum(s.total_boxes for s in assignments[p2]) + move_stop.total_boxes
-                    if new_boxes > v2.max_boxes:
-                        continue
-
-                    # Verificar restricoes do motorista destino
-                    d_restr = restrictions.get(v2.driver, {})
-                    avoid_cities = [c.upper() for c in d_restr.get('avoid_cities', [])]
-                    if move_stop.city and move_stop.city.upper().strip() in avoid_cities:
-                        continue
-
-                    # Distancia do stop ao centroide da viatura destino
-                    if assignments[p2]:
-                        t_lat = sum(s.lat for s in assignments[p2]) / len(assignments[p2])
-                        t_lon = sum(s.lon for s in assignments[p2]) / len(assignments[p2])
-                    else:
-                        t_lat, t_lon = depot_lat, depot_lon
-                    dist_to_target = haversine_km(move_stop.lat, move_stop.lon, t_lat, t_lon)
-
-                    # Nao sobrecarregar o destino
-                    h_target = _estimate_route_hours(
-                        assignments[p2] + [move_stop], depot_lat, depot_lon, config)
-                    if h_target > max_hours and hours.get(p2, 0) <= max_hours:
-                        continue
-
-                    if dist_to_target < best_dist:
-                        best_dist = dist_to_target
-                        best_plate = p2
-
-                if best_plate:
-                    assignments[plate].remove(move_stop)
-                    assignments[best_plate].append(move_stop)
-                    moved = True
-                    break
-
-            if moved:
-                break
-
-        if moved:
-            continue
-
-        # ── Fase 2: Otimizar km — mover stops que ficam melhor noutro veiculo ──
-        for plate in list(assignments.keys()):
-            stops = assignments[plate]
-            if len(stops) <= 2:
+            to_move = []
+            for p, ss in by_plate.items():
+                if p == anchor:
+                    continue
+                to_move.extend([s for s in ss if not _is_pinned(s, vehicles)])
+            if not to_move:
                 continue
 
-            v_lat = sum(s.lat for s in stops) / len(stops)
-            v_lon = sum(s.lon for s in stops) / len(stops)
+            new_anchor_stops = assignments[anchor] + to_move
+            if sum(s.total_boxes for s in new_anchor_stops) > v_anchor.max_boxes:
+                continue
+            if _move_blocked(to_move, zone, v_anchor.driver, restrictions):
+                continue
+            if _estimate_route_hours(new_anchor_stops, depot_lat, depot_lon,
+                                     config) > max_hours:
+                continue  # nao cabe em horas — split legitimo
 
-            # IMPORTANTE: paragens pre-atribuidas nao sao candidatas a mover
-            for move_stop in [s for s in stops if not _is_pinned(s, vehicles)]:
-                dist_to_own = haversine_km(move_stop.lat, move_stop.lon, v_lat, v_lon)
+            for s in to_move:
+                for p in by_plate:
+                    if p != anchor and s in assignments[p]:
+                        assignments[p].remove(s)
+                        break
+            assignments[anchor].extend(to_move)
+            did = True
+            break
 
-                best_target = None
-                best_ratio = 1.0  # So move se distancia ao target < 50% da distancia actual
-
-                for p2 in assignments:
-                    if p2 == plate or not assignments[p2]:
-                        continue
-                    v2 = v_map.get(p2)
-                    if not v2:
-                        continue
-                    new_boxes = sum(s.total_boxes for s in assignments[p2]) + move_stop.total_boxes
-                    if new_boxes > v2.max_boxes:
-                        continue
-
-                    # Restricoes do motorista destino
-                    d_restr = restrictions.get(v2.driver, {})
-                    avoid_cities = [c.upper() for c in d_restr.get('avoid_cities', [])]
-                    if move_stop.city and move_stop.city.upper().strip() in avoid_cities:
-                        continue
-
-                    t_lat = sum(s.lat for s in assignments[p2]) / len(assignments[p2])
-                    t_lon = sum(s.lon for s in assignments[p2]) / len(assignments[p2])
-                    dist_to_target = haversine_km(move_stop.lat, move_stop.lon, t_lat, t_lon)
-
-                    # So mover se fica significativamente mais perto (>50% melhoria)
-                    if dist_to_own > 0.5 and dist_to_target < dist_to_own * 0.5:
-                        h_target = _estimate_route_hours(
-                            assignments[p2] + [move_stop], depot_lat, depot_lon, config)
-                        if h_target <= max_hours:
-                            ratio = dist_to_target / max(dist_to_own, 0.1)
-                            if ratio < best_ratio:
-                                best_ratio = ratio
-                                best_target = p2
-
-                if best_target:
-                    assignments[plate].remove(move_stop)
-                    assignments[best_target].append(move_stop)
-                    moved = True
-                    break
-
-            if moved:
-                break
-
-        if moved:
-            continue
-
-        # ── Fase 3: Equilibrar horas entre motoristas ──
-        # So corre se o utilizador quiser equilibrar (balance_hours_weight > 0).
-        # Move carga do motorista mais ocupado para um menos ocupado, aceitando
-        # um custo de km proporcional ao peso escolhido.
-        balance_weight = config.get('balance_hours_weight', 0.4)
-        if balance_weight > 0 and _balance_hours_step(
-                assignments, vehicles, v_map, config, max_hours,
-                restrictions, hours, balance_weight, depot_lat, depot_lon):
-            moved = True
-            continue
-
-        if not moved:
+        if not did:
             break
 
 
-def _balance_hours_step(assignments, vehicles, v_map, config, max_hours,
-                        restrictions, hours, balance_weight,
-                        depot_lat, depot_lon):
+def _fix_overloaded(assignments, vehicles, v_map, config, max_hours,
+                    restrictions, hours, depot_lat, depot_lon, max_zones):
     """
-    Um passo de equilibrio de horas: tira UMA paragem do motorista mais
-    ocupado e da-a a um menos ocupado, se isso reduzir o desequilibrio e o
-    custo de km extra for aceitavel para o peso escolhido.
-
-    Devolve True se moveu algo (para o loop principal continuar).
-
-    Convergencia: so aceita mover se reduz o MAXIMO de horas (o pico desce),
-    por isso o numero de movimentos e limitado.
+    Corrige viaturas acima de max_hours. Tenta primeiro mover ZONAS inteiras
+    (mantem coesao); se nenhuma zona inteira resolver, move stops individuais
+    como ultimo recurso (overload e constraint dura, tem de ser resolvido).
     """
-    # Km extra que aceitamos gastar para tirar 1h ao motorista mais ocupado.
-    # weight 1.0 -> ate 25 km/h; weight 0.4 -> ate 10 km/h.
-    MAX_KM_PER_HOUR = 25.0
-    km_budget_per_hour = balance_weight * MAX_KM_PER_HOUR
+    overloaded = [(p, h) for p, h in hours.items()
+                  if h > max_hours and len(assignments[p]) > 1]
+    overloaded.sort(key=lambda x: -x[1])
 
-    # So vale a pena equilibrar se o desvio for relevante.
-    # gap minimo (h) para agir, menor quanto maior o peso.
-    min_gap = max(0.3, 1.2 * (1 - balance_weight))
+    for plate, h in overloaded:
+        stops = assignments[plate]
+        km_src_before = _km_of(stops, depot_lat, depot_lon, config)
 
+        # ── Tentar mover uma zona inteira (preferir a mais afastada) ──
+        zones = defaultdict(list)
+        for s in stops:
+            zones[s.zone_name].append(s)
+
+        # ordenar zonas por distancia ao centroide da viatura (outliers primeiro)
+        v_lat = sum(s.lat for s in stops) / len(stops)
+        v_lon = sum(s.lon for s in stops) / len(stops)
+
+        def _zone_dist(z):
+            zs = zones[z]
+            zl = sum(s.lat for s in zs) / len(zs)
+            zo = sum(s.lon for s in zs) / len(zs)
+            return haversine_km(zl, zo, v_lat, v_lon)
+
+        for zone in sorted(zones, key=_zone_dist, reverse=True):
+            zstops = zones[zone]
+            movable = [s for s in zstops if not _is_pinned(s, vehicles)]
+            if not movable or len(movable) != len(zstops):
+                continue  # zona com pinned — nao mover inteira
+            rem = [s for s in stops if s not in movable]
+            if not rem:
+                continue  # nao esvaziar a viatura
+
+            best_p2, best_km = None, float('inf')
+            for p2 in assignments:
+                if p2 == plate:
+                    continue
+                v2 = v_map.get(p2)
+                if not v2:
+                    continue
+                if sum(s.total_boxes for s in assignments[p2]) + \
+                        sum(s.total_boxes for s in movable) > v2.max_boxes:
+                    continue
+                if _move_blocked(movable, zone, v2.driver, restrictions):
+                    continue
+                if _distinct_zones_after(assignments[p2], zone) > max_zones:
+                    continue
+                new_dest = assignments[p2] + movable
+                if _estimate_route_hours(new_dest, depot_lat, depot_lon,
+                                         config) > max_hours:
+                    continue
+                km_delta = (_km_of(rem, depot_lat, depot_lon, config)
+                            + _km_of(new_dest, depot_lat, depot_lon, config)) \
+                           - (km_src_before
+                              + _km_of(assignments[p2], depot_lat, depot_lon, config))
+                if km_delta < best_km:
+                    best_km = km_delta
+                    best_p2 = p2
+
+            if best_p2:
+                for s in movable:
+                    assignments[plate].remove(s)
+                assignments[best_p2].extend(movable)
+                return True
+
+        # ── Fallback: mover stops individuais (outliers) ──
+        stops_by_outlier = sorted(
+            [s for s in stops if not _is_pinned(s, vehicles)],
+            key=lambda s: -haversine_km(s.lat, s.lon, v_lat, v_lon)
+        )
+        for move_stop in stops_by_outlier:
+            best_plate, best_dist = None, float('inf')
+            for p2 in assignments:
+                if p2 == plate:
+                    continue
+                v2 = v_map.get(p2)
+                if not v2:
+                    continue
+                if sum(s.total_boxes for s in assignments[p2]) + \
+                        move_stop.total_boxes > v2.max_boxes:
+                    continue
+                if _city_blocked([move_stop], v2.driver, restrictions):
+                    continue
+                if assignments[p2]:
+                    t_lat = sum(s.lat for s in assignments[p2]) / len(assignments[p2])
+                    t_lon = sum(s.lon for s in assignments[p2]) / len(assignments[p2])
+                else:
+                    t_lat, t_lon = depot_lat, depot_lon
+                dist_to_target = haversine_km(move_stop.lat, move_stop.lon, t_lat, t_lon)
+                h_target = _estimate_route_hours(
+                    assignments[p2] + [move_stop], depot_lat, depot_lon, config)
+                if h_target > max_hours and hours.get(p2, 0) <= max_hours:
+                    continue
+                if dist_to_target < best_dist:
+                    best_dist = dist_to_target
+                    best_plate = p2
+            if best_plate:
+                assignments[plate].remove(move_stop)
+                assignments[best_plate].append(move_stop)
+                return True
+
+    return False
+
+
+def _minimize_km_by_zone(assignments, vehicles, v_map, config, max_hours,
+                         restrictions, depot_lat, depot_lon, max_zones):
+    """
+    Minimiza km totais movendo ZONAS inteiras para a viatura onde reduzem
+    mais os km (mantendo a zona coesa). So move se reduzir km de forma real.
+    """
+    for plate in list(assignments.keys()):
+        stops = assignments[plate]
+        if not stops:
+            continue
+        km_src_before = _km_of(stops, depot_lat, depot_lon, config)
+
+        zones = defaultdict(list)
+        for s in stops:
+            zones[s.zone_name].append(s)
+
+        for zone, zstops in zones.items():
+            movable = [s for s in zstops if not _is_pinned(s, vehicles)]
+            if not movable or len(movable) != len(zstops):
+                continue
+            rem = [s for s in stops if s not in movable]
+            km_src_after = _km_of(rem, depot_lat, depot_lon, config)
+
+            for p2 in assignments:
+                if p2 == plate:
+                    continue
+                v2 = v_map.get(p2)
+                if not v2:
+                    continue
+                if sum(s.total_boxes for s in assignments[p2]) + \
+                        sum(s.total_boxes for s in movable) > v2.max_boxes:
+                    continue
+                if _move_blocked(movable, zone, v2.driver, restrictions):
+                    continue
+                if _distinct_zones_after(assignments[p2], zone) > max_zones:
+                    continue
+                new_dest = assignments[p2] + movable
+                if _estimate_route_hours(new_dest, depot_lat, depot_lon,
+                                         config) > max_hours:
+                    continue
+                km_dst_before = _km_of(assignments[p2], depot_lat, depot_lon, config)
+                km_dst_after = _km_of(new_dest, depot_lat, depot_lon, config)
+                km_delta = (km_src_after + km_dst_after) \
+                           - (km_src_before + km_dst_before)
+                if km_delta < -0.5:  # reduz km em pelo menos 0.5 km
+                    for s in movable:
+                        assignments[plate].remove(s)
+                    assignments[p2].extend(movable)
+                    return True
+    return False
+
+
+def _balance_hours_by_zone(assignments, vehicles, v_map, config, max_hours,
+                           restrictions, hours, depot_lat, depot_lon, max_zones):
+    """
+    Equilibra horas movendo UMA zona inteira do motorista mais ocupado para um
+    menos ocupado. So e chamado quando o gap de horas excede o limiar.
+    Escolhe o movimento que MENOS aumenta os km (prioridade continua a ser km).
+
+    Convergencia: so aceita mover se o pico de horas desce e o destino nao
+    ultrapassa o pico actual (nao oscila).
+    """
     active = {p: h for p, h in hours.items() if assignments[p]}
-    if len(active) < 2:
-        return False
-
     busiest = max(active, key=active.get)
     busiest_h = active[busiest]
-    min_h = min(active.values())
-
-    if busiest_h - min_h < min_gap:
-        return False  # ja esta equilibrado o suficiente
-
     busiest_stops = assignments[busiest]
-    if len(busiest_stops) <= 1:
-        return False
 
-    km_busiest_before = _estimate_route_km(busiest_stops, depot_lat, depot_lon, config)
+    km_src_before = _km_of(busiest_stops, depot_lat, depot_lon, config)
 
-    best_move = None
-    best_gain = 0.0  # reducao de desequilibrio (h) por unidade de km gasto
+    zones = defaultdict(list)
+    for s in busiest_stops:
+        zones[s.zone_name].append(s)
 
-    # Candidatos a mover: nao-pinados; outliers primeiro (reduzem km e horas)
-    b_lat = sum(s.lat for s in busiest_stops) / len(busiest_stops)
-    b_lon = sum(s.lon for s in busiest_stops) / len(busiest_stops)
-    movable = sorted(
-        [s for s in busiest_stops if not _is_pinned(s, vehicles)],
-        key=lambda s: -haversine_km(s.lat, s.lon, b_lat, b_lon)
-    )
+    best_move, best_km_delta = None, float('inf')
 
-    for move_stop in movable:
-        new_busiest_stops = [s for s in busiest_stops if s is not move_stop]
-        if not new_busiest_stops:
+    for zone, zstops in zones.items():
+        movable = [s for s in zstops if not _is_pinned(s, vehicles)]
+        if not movable or len(movable) != len(zstops):
             continue
-        new_busiest_h = _estimate_route_hours(
-            new_busiest_stops, depot_lat, depot_lon, config)
-        km_busiest_after = _estimate_route_km(
-            new_busiest_stops, depot_lat, depot_lon, config)
+        rem = [s for s in busiest_stops if s not in movable]
+        if not rem:
+            continue  # nao esvaziar a viatura toda
+        new_busiest_h = _estimate_route_hours(rem, depot_lat, depot_lon, config)
+        km_src_after = _km_of(rem, depot_lat, depot_lon, config)
 
         for p2 in assignments:
             if p2 == busiest:
@@ -985,74 +1056,108 @@ def _balance_hours_step(assignments, vehicles, v_map, config, max_hours,
             v2 = v_map.get(p2)
             if not v2:
                 continue
+            # So redistribuir entre viaturas JA ativas — nao ativar uma viatura
+            # parada so para equilibrar (isso contraria "minimizar carros/km").
+            if not assignments[p2]:
+                continue
             target_h = active.get(p2, 0)
-            # so mover para um MENOS ocupado (com folga real)
             if target_h >= busiest_h - 0.1:
+                continue  # so mover para menos ocupado
+            if sum(s.total_boxes for s in assignments[p2]) + \
+                    sum(s.total_boxes for s in movable) > v2.max_boxes:
                 continue
-
-            # capacidade
-            new_boxes = sum(s.total_boxes for s in assignments[p2]) + move_stop.total_boxes
-            if new_boxes > v2.max_boxes:
+            if _move_blocked(movable, zone, v2.driver, restrictions):
                 continue
-
-            # restricoes do destino (cidades)
-            d_restr = restrictions.get(v2.driver, {})
-            avoid_cities = [c.upper() for c in d_restr.get('avoid_cities', [])]
-            if move_stop.city and move_stop.city.upper().strip() in avoid_cities:
+            if _distinct_zones_after(assignments[p2], zone) > max_zones:
                 continue
-
-            target_stops_new = assignments[p2] + [move_stop]
-            new_target_h = _estimate_route_hours(
-                target_stops_new, depot_lat, depot_lon, config)
-
-            # nao ultrapassar max_hours no destino
+            new_dest = assignments[p2] + movable
+            new_target_h = _estimate_route_hours(new_dest, depot_lat, depot_lon, config)
             if new_target_h > max_hours:
                 continue
-            # nao "trocar de lugar" o pico: destino nao deve ficar pior que o
-            # pico actual (senao oscila)
             if new_target_h >= busiest_h:
-                continue
-
-            # tem de melhorar o desequilibrio (gap entre os dois desce)
+                continue  # nao trocar o pico de lugar
             old_gap = busiest_h - target_h
             new_gap = abs(new_busiest_h - new_target_h)
             if new_gap >= old_gap:
-                continue
-
-            hours_saved = busiest_h - new_busiest_h
-            if hours_saved <= 0.01:
-                continue
-
-            # custo de km extra deste movimento
-            km_target_before = _estimate_route_km(
-                assignments[p2], depot_lat, depot_lon, config)
-            km_target_after = _estimate_route_km(
-                target_stops_new, depot_lat, depot_lon, config)
-            km_delta = ((km_busiest_after + km_target_after)
-                        - (km_busiest_before + km_target_before))
-
-            # orcamento de km para as horas poupadas
-            budget = km_budget_per_hour * hours_saved
-            if km_delta > budget:
-                continue
-
-            # ganho: quanto desequilibrio reduzimos por km gasto
-            gap_reduction = old_gap - new_gap
-            gain = gap_reduction / max(km_delta, 0.1) if km_delta > 0 else gap_reduction * 100
-            if gain > best_gain:
-                best_gain = gain
-                best_move = (move_stop, p2)
-
-        # mover o primeiro outlier viavel encontrado (ja ordenado por outlier)
-        if best_move:
-            break
+                continue  # tem de melhorar o desequilibrio
+            km_dst_before = _km_of(assignments[p2], depot_lat, depot_lon, config)
+            km_dst_after = _km_of(new_dest, depot_lat, depot_lon, config)
+            km_delta = (km_src_after + km_dst_after) \
+                       - (km_src_before + km_dst_before)
+            if km_delta < best_km_delta:
+                best_km_delta = km_delta
+                best_move = (movable, p2)
 
     if best_move:
-        move_stop, target = best_move
-        assignments[busiest].remove(move_stop)
-        assignments[target].append(move_stop)
+        movable, target = best_move
+        for s in movable:
+            assignments[busiest].remove(s)
+        assignments[target].extend(movable)
         return True
     return False
+
+
+def _rebalance_for_efficiency(assignments, vehicles, config, max_hours,
+                              restrictions=None):
+    """
+    Reequilibra com a seguinte metrica (por ordem):
+
+    0. Coesao de zonas — cada zona inteira num so motorista (consolidar
+       zonas divididas). Se um motorista vai a uma zona, faz-na toda.
+    1. Respeitar max_hours (corrigir viaturas sobrecarregadas).
+    2. Minimizar km totais da empresa (mover zonas inteiras p/ viatura mais
+       proxima) — este e o objetivo PRINCIPAL.
+    3. So equilibrar horas quando a diferenca entre motoristas excede
+       balance_max_gap_hours (default 3h); mesmo assim, escolhe o movimento
+       que menos aumenta os km.
+
+    Pre-atribuidos (Transportador) NUNCA sao movidos.
+    """
+    depot_lat = config['depot']['lat']
+    depot_lon = config['depot']['lon']
+    v_map = {v.plate: v for v in vehicles}
+    if restrictions is None:
+        restrictions = config.get('driver_restrictions', {})
+    balance_gap = config.get('balance_max_gap_hours', 3.0)
+    max_zones = config.get('max_routes_per_vehicle', 3)
+
+    # Pass inicial: consolidar zonas divididas
+    _consolidate_split_zones(assignments, vehicles, v_map, config, max_hours,
+                             restrictions, depot_lat, depot_lon)
+
+    # ── ETAPA A: km + sobrecarga ate convergir (objetivo principal) ──
+    # Fases sequenciais (nao intercaladas com o equilibrio) para nao oscilar.
+    for _ in range(25):
+        hours = {p: (_estimate_route_hours(s, depot_lat, depot_lon, config)
+                     if s else 0) for p, s in assignments.items()}
+        if _fix_overloaded(assignments, vehicles, v_map, config, max_hours,
+                           restrictions, hours, depot_lat, depot_lon, max_zones):
+            continue
+        if _minimize_km_by_zone(assignments, vehicles, v_map, config, max_hours,
+                                restrictions, depot_lat, depot_lon, max_zones):
+            continue
+        break
+
+    # ── ETAPA B: equilibrar horas SO se a diferenca exceder o limiar ──
+    # So corre depois de a etapa de km ter convergido. Cada movimento baixa o
+    # pico de horas (convergencia) e escolhe o que menos aumenta km. Nao
+    # reotimizamos km a seguir, por isso nao ha oscilacao.
+    for _ in range(25):
+        hours = {p: (_estimate_route_hours(s, depot_lat, depot_lon, config)
+                     if s else 0) for p, s in assignments.items()}
+        active = {p: h for p, h in hours.items() if assignments[p]}
+        if len(active) < 2:
+            break
+        if (max(active.values()) - min(active.values())) <= balance_gap:
+            break  # ja esta dentro da tolerancia — manter foco nos km
+        if not _balance_hours_by_zone(assignments, vehicles, v_map, config,
+                                      max_hours, restrictions, hours,
+                                      depot_lat, depot_lon, max_zones):
+            break  # nenhum movimento util sem partir zonas — parar
+
+    # Pass final: garantir zonas coesas
+    _consolidate_split_zones(assignments, vehicles, v_map, config, max_hours,
+                             restrictions, depot_lat, depot_lon)
 
 
 def _redistribute_with_tiago(assignments, non_tiago, tiago, config, max_hours):

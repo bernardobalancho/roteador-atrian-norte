@@ -488,21 +488,17 @@ def main():
         )
 
         st.divider()
-        balance_weight = st.slider(
-            "⚖️ Equilíbrio horas vs km",
-            min_value=0, max_value=100,
-            value=int(config.get('balance_hours_weight', 0.4) * 100), step=10,
-            help="0% = minimizar só km da empresa (rotas mais curtas, horas podem ficar "
-                 "desiguais entre motoristas). 100% = equilibrar horas ao máximo "
-                 "(motoristas com cargas semelhantes, pode aumentar km totais). "
-                 "Recomendado: 30–50%."
+        balance_gap = st.slider(
+            "⚖️ Diferença de horas tolerada",
+            min_value=1.0, max_value=6.0,
+            value=float(config.get('balance_max_gap_hours', 3.0)), step=0.5,
+            help="O objetivo é SEMPRE minimizar os km da empresa. Só quando a "
+                 "diferença de horas entre o motorista mais e menos ocupado "
+                 "ultrapassa este valor é que o algoritmo equilibra horas "
+                 "(e mesmo aí, minimizando km). Valor baixo = equilibra mais "
+                 "cedo; valor alto = foca-se nos km e tolera mais desigualdade."
         )
-        if balance_weight == 0:
-            st.caption("🛣️ Foco total em minimizar km")
-        elif balance_weight >= 70:
-            st.caption("⚖️ Foco em igualar horas entre motoristas")
-        else:
-            st.caption("🔀 Equilíbrio misto km/horas")
+        st.caption(f"🛣️ Minimiza km sempre · equilibra horas só se gap > {balance_gap:.1f}h")
 
     # Apply sidebar changes to config
     for v in config['fleet']:
@@ -514,7 +510,7 @@ def main():
     config['work_hours']['reduced']['max_hours'] = max_hours_reduced
     config['road_factor'] = road_factor
     config['porto_time_reduction'] = porto_reduction / 100
-    config['balance_hours_weight'] = balance_weight / 100
+    config['balance_max_gap_hours'] = balance_gap
 
     # ── Main content: só Input 1 (Mapa de Picking) ──
     # Os critérios, frota, zonas e restrições vivem agora dentro da app
