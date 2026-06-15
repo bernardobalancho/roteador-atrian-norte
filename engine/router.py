@@ -902,8 +902,157 @@ def _rebalance_for_efficiency(assignments, vehicles, config, max_hours,
             if moved:
                 break
 
+        if moved:
+            continue
+
+        # ── Fase 3: Equilibrar horas entre motoristas ──
+        # So corre se o utilizador quiser equilibrar (balance_hours_weight > 0).
+        # Move carga do motorista mais ocupado para um menos ocupado, aceitando
+        # um custo de km proporcional ao peso escolhido.
+        balance_weight = config.get('balance_hours_weight', 0.4)
+        if balance_weight > 0 and _balance_hours_step(
+                assignments, vehicles, v_map, config, max_hours,
+                restrictions, hours, balance_weight, depot_lat, depot_lon):
+            moved = True
+            continue
+
         if not moved:
             break
+
+
+def _balance_hours_step(assignments, vehicles, v_map, config, max_hours,
+                        restrictions, hours, balance_weight,
+                        depot_lat, depot_lon):
+    """
+    Um passo de equilibrio de horas: tira UMA paragem do motorista mais
+    ocupado e da-a a um menos ocupado, se isso reduzir o desequilibrio e o
+    custo de km extra for aceitavel para o peso escolhido.
+
+    Devolve True se moveu algo (para o loop principal continuar).
+
+    Convergencia: so aceita mover se reduz o MAXIMO de horas (o pico desce),
+    por isso o numero de movimentos e limitado.
+    """
+    # Km extra que aceitamos gastar para tirar 1h ao motorista mais ocupado.
+    # weight 1.0 -> ate 25 km/h; weight 0.4 -> ate 10 km/h.
+    MAX_KM_PER_HOUR = 25.0
+    km_budget_per_hour = balance_weight * MAX_KM_PER_HOUR
+
+    # So vale a pena equilibrar se o desvio for relevante.
+    # gap minimo (h) para agir, menor quanto maior o peso.
+    min_gap = max(0.3, 1.2 * (1 - balance_weight))
+
+    active = {p: h for p, h in hours.items() if assignments[p]}
+    if len(active) < 2:
+        return False
+
+    busiest = max(active, key=active.get)
+    busiest_h = active[busiest]
+    min_h = min(active.values())
+
+    if busiest_h - min_h < min_gap:
+        return False  # ja esta equilibrado o suficiente
+
+    busiest_stops = assignments[busiest]
+    if len(busiest_stops) <= 1:
+        return False
+
+    km_busiest_before = _estimate_route_km(busiest_stops, depot_lat, depot_lon, config)
+
+    best_move = None
+    best_gain = 0.0  # reducao de desequilibrio (h) por unidade de km gasto
+
+    # Candidatos a mover: nao-pinados; outliers primeiro (reduzem km e horas)
+    b_lat = sum(s.lat for s in busiest_stops) / len(busiest_stops)
+    b_lon = sum(s.lon for s in busiest_stops) / len(busiest_stops)
+    movable = sorted(
+        [s for s in busiest_stops if not _is_pinned(s, vehicles)],
+        key=lambda s: -haversine_km(s.lat, s.lon, b_lat, b_lon)
+    )
+
+    for move_stop in movable:
+        new_busiest_stops = [s for s in busiest_stops if s is not move_stop]
+        if not new_busiest_stops:
+            continue
+        new_busiest_h = _estimate_route_hours(
+            new_busiest_stops, depot_lat, depot_lon, config)
+        km_busiest_after = _estimate_route_km(
+            new_busiest_stops, depot_lat, depot_lon, config)
+
+        for p2 in assignments:
+            if p2 == busiest:
+                continue
+            v2 = v_map.get(p2)
+            if not v2:
+                continue
+            target_h = active.get(p2, 0)
+            # so mover para um MENOS ocupado (com folga real)
+            if target_h >= busiest_h - 0.1:
+                continue
+
+            # capacidade
+            new_boxes = sum(s.total_boxes for s in assignments[p2]) + move_stop.total_boxes
+            if new_boxes > v2.max_boxes:
+                continue
+
+            # restricoes do destino (cidades)
+            d_restr = restrictions.get(v2.driver, {})
+            avoid_cities = [c.upper() for c in d_restr.get('avoid_cities', [])]
+            if move_stop.city and move_stop.city.upper().strip() in avoid_cities:
+                continue
+
+            target_stops_new = assignments[p2] + [move_stop]
+            new_target_h = _estimate_route_hours(
+                target_stops_new, depot_lat, depot_lon, config)
+
+            # nao ultrapassar max_hours no destino
+            if new_target_h > max_hours:
+                continue
+            # nao "trocar de lugar" o pico: destino nao deve ficar pior que o
+            # pico actual (senao oscila)
+            if new_target_h >= busiest_h:
+                continue
+
+            # tem de melhorar o desequilibrio (gap entre os dois desce)
+            old_gap = busiest_h - target_h
+            new_gap = abs(new_busiest_h - new_target_h)
+            if new_gap >= old_gap:
+                continue
+
+            hours_saved = busiest_h - new_busiest_h
+            if hours_saved <= 0.01:
+                continue
+
+            # custo de km extra deste movimento
+            km_target_before = _estimate_route_km(
+                assignments[p2], depot_lat, depot_lon, config)
+            km_target_after = _estimate_route_km(
+                target_stops_new, depot_lat, depot_lon, config)
+            km_delta = ((km_busiest_after + km_target_after)
+                        - (km_busiest_before + km_target_before))
+
+            # orcamento de km para as horas poupadas
+            budget = km_budget_per_hour * hours_saved
+            if km_delta > budget:
+                continue
+
+            # ganho: quanto desequilibrio reduzimos por km gasto
+            gap_reduction = old_gap - new_gap
+            gain = gap_reduction / max(km_delta, 0.1) if km_delta > 0 else gap_reduction * 100
+            if gain > best_gain:
+                best_gain = gain
+                best_move = (move_stop, p2)
+
+        # mover o primeiro outlier viavel encontrado (ja ordenado por outlier)
+        if best_move:
+            break
+
+    if best_move:
+        move_stop, target = best_move
+        assignments[busiest].remove(move_stop)
+        assignments[target].append(move_stop)
+        return True
+    return False
 
 
 def _redistribute_with_tiago(assignments, non_tiago, tiago, config, max_hours):

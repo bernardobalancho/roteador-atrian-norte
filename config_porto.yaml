@@ -36,6 +36,7 @@ fuel:
   price_per_liter: 1.65
   consumption_per_100km: 7.0
 road_factor: 1.35
+balance_hours_weight: 0.4
 traffic_profiles:
   bands:
   - start: 06:00
