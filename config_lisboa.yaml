@@ -136,28 +136,28 @@ zone_map:
   MSZ5: Evora
   MSTROIA: Comporta/Sines/Troia
 distribution_map:
-  Belem/Alcantara/Estrela/Ajuda:
+  Lisboa - Zona 1:
     driver_priority:
       BRUNO: 1
       PAULO: 2
       CARLOS: 3
       JOÃO: 4
       TONY: 5
-  Benfica/Carnide/Lumiar:
+  Lisboa - Zona 2:
     driver_priority:
       PAULO: 1
       BRUNO: 2
       CARLOS: 3
       JOÃO: 4
       TONY: 5
-  Sta Maria Maior/Av Novas/Alvalade/Campolide:
+  Lisboa - Zona 3:
     driver_priority:
       CARLOS: 1
       BRUNO: 2
       PAULO: 3
       JOÃO: 4
       TONY: 5
-  Olivais/Marvila/Beato/Pq Nacoes:
+  Lisboa - Zona 4:
     driver_priority:
       JOÃO: 1
       PAULO: 2
@@ -199,14 +199,14 @@ distribution_map:
       JOÃO: 3
       CARLOS: 4
       TONY: 5
-  Loures/Odivelas:
+  Loures + Odivelas:
     driver_priority:
       JOÃO: 1
       BRUNO: 2
       PAULO: 3
       CARLOS: 4
       TONY: 5
-  Aeroporto:
+  Lisboa - Aeroporto:
     driver_priority:
       JOÃO: 1
       BRUNO: 2
@@ -248,9 +248,9 @@ max_routes_per_vehicle: 3
 driver_restrictions:
   TONY:
     avoid_zones:
-    - Belem/Alcantara/Estrela/Ajuda
-    - Benfica/Carnide/Lumiar
-    - Loures/Odivelas
+    - Lisboa - Zona 1
+    - Lisboa - Zona 2
+    - Loures + Odivelas
     - Sintra/Mafra
     - Amadora
     - Oeiras
