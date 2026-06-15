@@ -196,9 +196,11 @@ def _map_zone(route_code, zone_map):
     """Mapeia codigo de rota para nome de zona."""
     if not route_code:
         return "Desconhecida"
-    for prefix, zone_name in zone_map.items():
+    # Verificar prefixos mais especificos (mais longos) primeiro, para evitar
+    # que "PORZ1E" (Porto I Este) capture "PORZ1ESP" (Porto Centro Especial).
+    for prefix in sorted(zone_map, key=len, reverse=True):
         if route_code.startswith(prefix) or prefix in route_code:
-            return zone_name.strip()
+            return zone_map[prefix].strip()
     # Fallback: usar a descricao apos o codigo (ex: "MSZ6- Comporta..." → "Comporta...")
     parts = route_code.split(' ', 1)
     if len(parts) > 1:
