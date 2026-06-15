@@ -198,11 +198,12 @@ def _map_zone(route_code, zone_map):
         return "Desconhecida"
     for prefix, zone_name in zone_map.items():
         if route_code.startswith(prefix) or prefix in route_code:
-            return zone_name
+            return zone_name.strip()
+    # Fallback: usar a descricao apos o codigo (ex: "MSZ6- Comporta..." → "Comporta...")
     parts = route_code.split(' ', 1)
     if len(parts) > 1:
-        return parts[1]
-    return route_code
+        return parts[1].strip()
+    return route_code.strip()
 
 
 def build_stops(lines, config):

@@ -192,7 +192,7 @@ distribution_map:
       CARLOS: 3
       JOÃO: 4
       TONY: 5
-  Sintra/Mafra:
+  Sintra + Mafra:
     driver_priority:
       BRUNO: 1
       PAULO: 2
@@ -237,7 +237,7 @@ distribution_map:
       TONY: 1
       JOÃO: 2
       BRUNO: 3
-  Comporta/Sines/Troia:
+  Comporta - Sines - Troia:
     driver_priority:
       TONY: 1
       JOÃO: 2
@@ -251,7 +251,7 @@ driver_restrictions:
     - Lisboa - Zona 1
     - Lisboa - Zona 2
     - Loures + Odivelas
-    - Sintra/Mafra
+    - Sintra + Mafra
     - Amadora
     - Oeiras
     - Cascais
@@ -260,5 +260,5 @@ driver_restrictions:
     - Sesimbra/Setubal/Palmela/Quinta Anjo
     - Pinhal Novo/Poceirao/Marateca
     - Evora
-    - Comporta/Sines/Troia
-    - Sintra/Mafra
+    - Comporta - Sines - Troia
+    - Sintra + Mafra
