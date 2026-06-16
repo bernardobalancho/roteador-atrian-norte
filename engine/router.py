@@ -13,7 +13,7 @@ Fluxo:
 import re
 import math
 from datetime import datetime
-from collections import defaultdict
+from collections import defaultdict, Counter
 from ortools.constraint_solver import routing_enums_pb2, pywrapcp
 
 from .models import PickingLine, Stop, Vehicle, AssignedStop, RoutePlan
@@ -412,6 +412,20 @@ def _find_best_vehicle_for_zone(zone_name, zstops, assignments, vehicles,
         else:
             dist = haversine_km(depot_lat, depot_lon, z_lat, z_lon)
             score += dist * 0.5
+
+        # Bonus de ADJACENCIA (suave): se esta viatura ja serve paragens no
+        # mesmo local (<0.15km) das desta zona, ligeiro incentivo a juntar.
+        # Mantido fraco para nao sobrecarregar um motorista em dias pesados —
+        # a consolidacao por proximidade (passo final) trata do resto.
+        if assignments[v.plate]:
+            same_spot = 0
+            for zs in zstops:
+                for vs in assignments[v.plate]:
+                    if haversine_km(zs.lat, zs.lon, vs.lat, vs.lon) < 0.15:
+                        same_spot += 1
+                        break
+            if same_spot:
+                score -= min(30, 10 * same_spot)
 
         # Pressao de janelas horarias: nao acumular muitas janelas apertadas
         # numa unica viatura — espalha-as por viaturas com folga.
@@ -858,6 +872,113 @@ def _consolidate_split_zones(assignments, vehicles, v_map, config, max_hours,
             break
 
 
+def _consolidate_by_proximity(assignments, vehicles, v_map, config, max_hours,
+                              restrictions, depot_lat, depot_lon, radius_km=0.2):
+    """
+    PROXIMIDADE MANDA (mesma localizacao): junta clientes praticamente no
+    mesmo sitio (< radius_km, ~mesmo predio/rua) que estao em motoristas
+    diferentes, ao mesmo motorista — mesmo de zonas administrativas distintas.
+
+    Foco em casos de desperdicio claro: dois clientes no mesmo edificio
+    servidos por carros diferentes. Como estao co-localizados, juntar custa
+    ~0 tempo de viagem (so descarga), por isso nao sobrecarrega o motorista.
+
+    NOTA: nao tenta juntar bairros inteiros — em dias pesados o centro tem de
+    ser dividido por varios carros (capacidade). Aqui so se eliminam os
+    sobreposicoes exatas.
+
+    Respeita: pre-atribuidos (pinned, ancora), capacidade, max_hours (+margem
+    pequena, pois co-localizados quase nao somam tempo) e restricoes.
+    """
+    changed_any = False
+    for _ in range(15):
+        # Construir lista de todas as paragens com a viatura atual
+        all_stops, stop_plate = [], {}
+        for p, ss in assignments.items():
+            for s in ss:
+                all_stops.append(s)
+                stop_plate[id(s)] = p
+        n = len(all_stops)
+        if n < 2:
+            break
+
+        # Union-find para clusters de proximidade
+        parent = list(range(n))
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                if haversine_km(all_stops[i].lat, all_stops[i].lon,
+                                all_stops[j].lat, all_stops[j].lon) < radius_km:
+                    ri, rj = find(i), find(j)
+                    if ri != rj:
+                        parent[ri] = rj
+
+        clusters = defaultdict(list)
+        for i in range(n):
+            clusters[find(i)].append(i)
+
+        did = False
+        for idxs in clusters.values():
+            if len(idxs) < 2:
+                continue
+            cstops = [all_stops[i] for i in idxs]
+            plates = set(stop_plate[id(s)] for s in cstops)
+            if len(plates) < 2:
+                continue  # ja estao todos no mesmo motorista
+
+            # ancora: viatura com pinned no cluster; senao a que tem mais stops
+            pinned_plates = set(stop_plate[id(s)] for s in cstops
+                                if _is_pinned(s, vehicles))
+            if len(pinned_plates) > 1:
+                continue  # pre-atribuicoes em viaturas diferentes — respeitar
+            if pinned_plates:
+                target = next(iter(pinned_plates))
+            else:
+                cnt = Counter(stop_plate[id(s)] for s in cstops)
+                target = cnt.most_common(1)[0][0]
+
+            v_t = v_map.get(target)
+            if not v_t:
+                continue
+
+            # stops a mover: nao-pinados, de outras viaturas, que o destino
+            # nao deva evitar (avoid_zones/avoid_cities)
+            to_move = [s for s in cstops
+                       if stop_plate[id(s)] != target
+                       and not _is_pinned(s, vehicles)
+                       and not _move_blocked([s], s.zone_name, v_t.driver, restrictions)]
+            if not to_move:
+                continue
+
+            new_target = assignments[target] + to_move
+            if sum(s.total_boxes for s in new_target) > v_t.max_boxes:
+                # tentar mover so um subconjunto nao resolve bem — saltar
+                continue
+            # Co-localizados quase nao somam tempo de viagem; permitir pequena
+            # margem (eliminar a viagem separada do outro carro compensa).
+            if _estimate_route_hours(new_target, depot_lat, depot_lon,
+                                     config) > max_hours + 0.5:
+                continue
+
+            for s in to_move:
+                assignments[stop_plate[id(s)]].remove(s)
+                assignments[target].append(s)
+            did = True
+            changed_any = True
+            break  # recomecar (lista mudou)
+
+        if not did:
+            break
+
+    return changed_any
+
+
 def _fix_overloaded(assignments, vehicles, v_map, config, max_hours,
                     restrictions, hours, depot_lat, depot_lon, max_zones):
     """
@@ -1158,9 +1279,11 @@ def _rebalance_for_efficiency(assignments, vehicles, config, max_hours,
                                       depot_lat, depot_lon, max_zones):
             break  # nenhum movimento util sem partir zonas — parar
 
-    # Pass final: garantir zonas coesas
-    _consolidate_split_zones(assignments, vehicles, v_map, config, max_hours,
-                             restrictions, depot_lat, depot_lon)
+    # ── ETAPA C (ultima palavra): PROXIMIDADE MANDA ──
+    # Junta clientes muito proximos (mesmo de zonas diferentes) ao mesmo
+    # motorista. Corre por ultimo para nao ser desfeito pelas etapas de zona.
+    _consolidate_by_proximity(assignments, vehicles, v_map, config, max_hours,
+                              restrictions, depot_lat, depot_lon)
 
 
 def _redistribute_with_tiago(assignments, non_tiago, tiago, config, max_hours):

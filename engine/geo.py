@@ -25,6 +25,37 @@ _nominatim_cache = {}       # {cache_key: (lat, lon) ou None}
 _last_nominatim_call = 0.0  # rate limiting: 1 req/sec
 _geocache_dirty = False     # True quando ha entradas novas nao guardadas
 
+# ── geoapi.pt Config (geocodificacao por codigo postal PT — muito mais preciso) ──
+GEOAPI_BASE = "https://json.geoapi.pt"
+_GEOAPI_CACHE_FILE = "/tmp/atrian_geoapi.json"
+_geoapi_cache = {}          # {pc: (lat, lon) ou None} — persistente em disco
+_last_geoapi_call = 0.0     # rate limiting (geoapi.pt devolve 429 facilmente)
+_geoapi_dirty = False
+
+
+def _load_geoapi_cache():
+    global _geoapi_cache
+    try:
+        if os.path.exists(_GEOAPI_CACHE_FILE):
+            with open(_GEOAPI_CACHE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            _geoapi_cache = {k: (tuple(v) if isinstance(v, list) else v)
+                             for k, v in data.items()}
+    except Exception:
+        _geoapi_cache = {}
+
+
+def _save_geoapi_cache():
+    global _geoapi_dirty
+    if not _geoapi_dirty:
+        return
+    try:
+        with open(_GEOAPI_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(_geoapi_cache, f, ensure_ascii=False, separators=(',', ':'))
+        _geoapi_dirty = False
+    except Exception:
+        pass
+
 
 def _load_geocache():
     """Carrega cache de geocodificacao do disco (chamado uma vez ao iniciar)."""
@@ -331,6 +362,95 @@ def _validate_result(result, expected, max_km=40):
     return dist < max_km
 
 
+_geoapi_blocked = False  # se geoapi.pt esta a bloquear (429), parar de tentar nesta sessao
+
+
+def _geoapi_rate_limit():
+    """Garante intervalo minimo entre pedidos geoapi.pt (evita HTTP 429)."""
+    global _last_geoapi_call
+    now = _time.time()
+    elapsed = now - _last_geoapi_call
+    if elapsed < 1.0:
+        _time.sleep(1.0 - elapsed)
+    _last_geoapi_call = _time.time()
+
+
+def _geoapi_fetch(path):
+    """
+    Um pedido a geoapi.pt. Devolve:
+      (lat, lon)  -> sucesso
+      None        -> 200 mas sem coordenadas (CP sem centroide)
+      'RATELIMIT' -> 429 mesmo apos backoff (transitorio, nao cachear)
+    """
+    _geoapi_rate_limit()
+    try:
+        r = requests.get(f"{GEOAPI_BASE}{path}",
+                         headers={'User-Agent': 'AtrianRouter/1.0'}, timeout=10)
+        if r.status_code == 429:
+            _time.sleep(4.0)
+            r = requests.get(f"{GEOAPI_BASE}{path}",
+                             headers={'User-Agent': 'AtrianRouter/1.0'}, timeout=10)
+            if r.status_code == 429:
+                return 'RATELIMIT'
+        if r.status_code == 200:
+            d = r.json()
+            c = d.get('centro') or d.get('centroide')
+            if isinstance(c, list) and len(c) == 2:
+                return (float(c[0]), float(c[1]))
+            pts = d.get('pontos')
+            if isinstance(pts, list) and pts and isinstance(pts[0], dict):
+                lat = pts[0].get('lat') or pts[0].get('latitude')
+                lon = pts[0].get('lon') or pts[0].get('longitude')
+                if lat and lon:
+                    return (float(lat), float(lon))
+    except Exception:
+        pass
+    return None
+
+
+def _geoapi_pt(postal_code):
+    """
+    Geocodifica um codigo postal PT via geoapi.pt (muito mais preciso que o
+    Nominatim para CPs portugueses). Tenta CP completo e, se necessario, o CP
+    de 4 digitos. Cache persistente em disco. Em 429 transitorio NAO cacheia
+    (para tentar de novo numa proxima execucao).
+    """
+    global _geoapi_dirty, _geoapi_blocked
+    pc = _format_postal(postal_code)
+    if not pc:
+        return None
+    if pc in _geoapi_cache:
+        return _geoapi_cache[pc]
+    if _geoapi_blocked:
+        return None  # geoapi a bloquear nesta sessao — usar so Nominatim
+
+    result = _geoapi_fetch(f"/cp/{pc}")
+    if result == 'RATELIMIT':
+        _geoapi_blocked = True  # parar de tentar nesta sessao (evita lentidao)
+        return None
+    if not result:
+        cp4 = pc.split('-')[0]
+        if len(cp4) == 4:
+            r2 = _geoapi_fetch(f"/cp/{cp4}")
+            if r2 == 'RATELIMIT':
+                _geoapi_blocked = True
+                return None
+            result = r2 or None
+
+    # Validar Portugal continental
+    if result and not (36.5 < result[0] < 42.5 and -9.8 < result[1] < -6.0):
+        result = None
+
+    _geoapi_cache[pc] = result
+    _geoapi_dirty = True
+    _save_geoapi_cache()
+    return result
+
+
+# Carregar cache geoapi persistente ao importar
+_load_geoapi_cache()
+
+
 def geocode_postal(postal_code: str, city: str = None,
                    address: str = None) -> tuple:
     """
@@ -355,55 +475,78 @@ def geocode_postal(postal_code: str, city: str = None,
     addr_clean = str(address or '').strip()[:60] if address else ''
     cache_key = f"{pc}|{addr_clean}" if addr_clean else pc
 
+    # Coordenada de referencia do CP via geoapi.pt (precisa para PT) — fonte
+    # primaria ao nivel do CP e validador do resultado do Nominatim.
+    # Consultada ANTES do cache para poder invalidar entradas antigas erradas.
+    geoapi_coord = _geoapi_pt(postal_code)
+    expected = geoapi_coord or _get_expected_coords(postal_code)
+
     # ── Verificar cache (chave completa) ──
+    # Se houver geoapi e o valor em cache estiver longe (>3km), o cache esta
+    # envenenado (geocoding antigo errado) — ignora-lo e recalcular.
     if cache_key in _nominatim_cache:
         cached = _nominatim_cache[cache_key]
         if cached:
-            return cached
-        # cached is None = Nominatim nao encontrou, usar fallback estático
+            if not geoapi_coord or haversine_km(
+                    cached[0], cached[1], geoapi_coord[0], geoapi_coord[1]) < 3.0:
+                return cached
+        elif not geoapi_coord:
+            pass  # None em cache e sem geoapi — seguir para fallback estatico
 
-    # ── Verificar cache por CP simples (fallback rapido) ──
-    # Se o mesmo CP ja foi geocodificado com outra morada, usar esse resultado.
-    # CPs portugueses de 7 digitos identificam areas pequenas (~rua/quarteirao).
+    # ── Cache por CP simples (so se consistente com geoapi) ──
     if addr_clean and pc in _nominatim_cache and _nominatim_cache[pc]:
-        return _nominatim_cache[pc]
+        c = _nominatim_cache[pc]
+        if not geoapi_coord or haversine_km(
+                c[0], c[1], geoapi_coord[0], geoapi_coord[1]) < 3.0:
+            return c
 
-    expected = _get_expected_coords(postal_code)
     result = None
 
-    # ── 1. Pesquisa por morada completa (mais precisa) ──
+    # ── 1. Pesquisa por morada completa (precisao ~rua) ──
+    # So se aceita se cair perto do centroide real do CP (geoapi), evitando
+    # que o Nominatim devolva um sitio errado (outra cidade/centro generico).
     if addr_clean and len(addr_clean) > 3:
-        # So usar se parece uma morada (nao um numero/codigo)
         has_letters = any(c.isalpha() for c in addr_clean)
         if has_letters:
             city_str = str(city or '').strip()
             q = f"{addr_clean}, {pc}, {city_str}, Portugal" if city_str else f"{addr_clean}, {pc}, Portugal"
-            result = _nominatim_search({
+            cand = _nominatim_search({
                 'q': q, 'format': 'json', 'limit': 1, 'countrycodes': 'pt',
             })
-            # Validar: esta na zona certa?
-            if result and not _validate_result(result, expected, max_km=35):
-                result = None  # Match errado, descartar
+            if cand:
+                if geoapi_coord:
+                    # Aceitar a precisao de rua so se < 3km do CP real
+                    if haversine_km(cand[0], cand[1], geoapi_coord[0], geoapi_coord[1]) < 3.0:
+                        result = cand
+                elif _validate_result(cand, expected, max_km=35):
+                    result = cand
 
-    # ── 2. Pesquisa por codigo postal + cidade ──
+    # ── 2. Centroide do codigo postal via geoapi.pt (preciso) ──
+    if not result and geoapi_coord:
+        result = geoapi_coord
+
+    # ── 3. Nominatim FREE-TEXT por CP + cidade ──
+    # IMPORTANTE: usar query livre "CP, Cidade, Portugal" em vez do parametro
+    # estruturado postalcode= — este ultimo devolve o centro generico da cidade
+    # para muitos CPs PT (fazendo varios CPs colapsarem no mesmo ponto).
     if not result:
         city_str = str(city or '').strip()
         if city_str and city_str != '0':
-            result = _nominatim_search({
-                'postalcode': pc, 'city': city_str,
-                'country': 'Portugal', 'format': 'json', 'limit': 1,
+            cand = _nominatim_search({
+                'q': f"{pc}, {city_str}, Portugal",
+                'format': 'json', 'limit': 1, 'countrycodes': 'pt',
             })
-            if result and not _validate_result(result, expected, max_km=40):
-                result = None
+            if cand and _validate_result(cand, expected, max_km=40):
+                result = cand
 
-    # ── 3. Pesquisa so por codigo postal ──
+    # ── 4. Nominatim FREE-TEXT so por CP ──
     if not result:
-        result = _nominatim_search({
-            'postalcode': pc, 'country': 'Portugal',
-            'format': 'json', 'limit': 1,
+        cand = _nominatim_search({
+            'q': f"{pc}, Portugal",
+            'format': 'json', 'limit': 1, 'countrycodes': 'pt',
         })
-        if result and not _validate_result(result, expected, max_km=50):
-            result = None
+        if cand and _validate_result(cand, expected, max_km=50):
+            result = cand
 
     # Guardar no cache (mesmo se None, para nao repetir) e persistir no disco
     global _geocache_dirty
