@@ -2,6 +2,9 @@
 Roteador Atrian Norte — App Web
 Uso diário: upload do mapa de picking → roteamento → download dos outputs.
 """
+# Marca de build (muda a cada deploy importante — permite confirmar versao viva)
+APP_BUILD = "2026-06-16 · geocoding-pt + proximidade"
+
 import streamlit as st
 import yaml
 import os
@@ -499,6 +502,9 @@ def main():
                  "cedo; valor alto = foca-se nos km e tolera mais desigualdade."
         )
         st.caption(f"🛣️ Minimiza km sempre · equilibra horas só se gap > {balance_gap:.1f}h")
+
+        st.divider()
+        st.caption(f"🔖 Versão: {APP_BUILD}")
 
     # Apply sidebar changes to config
     for v in config['fleet']:
