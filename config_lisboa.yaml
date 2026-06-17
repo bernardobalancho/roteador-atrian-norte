@@ -6,7 +6,7 @@ depot:
 work_hours:
   normal:
     start: 06:30
-    max_hours: 8.0
+    max_hours: 8.5
   reduced:
     start: 07:00
     max_hours: 5.5
@@ -25,7 +25,7 @@ unloading:
   interval_size: 5
 city_time_adjustment: 0.05
 unforeseen_tolerance: 0.05
-support_driver_reduction: 0.1
+support_driver_reduction: 0.05
 support_driver:
   driver_name: BRUNO
   display_name: Bruno
@@ -140,8 +140,8 @@ distribution_map:
     driver_priority:
       BRUNO: 1
       PAULO: 2
-      CARLOS: 3
-      JOÃO: 4
+      JOÃO: 3
+      CARLOS: 4
       TONY: 5
   Lisboa - Zona 2:
     driver_priority:
@@ -166,38 +166,36 @@ distribution_map:
       TONY: 5
   Lisboa Centro Especial:
     driver_priority:
-      PAULO: 1
-      CARLOS: 2
-      BRUNO: 3
-      JOÃO: 4
-      TONY: 5
+      CARLOS: 1
+      BRUNO: 2
+      JOÃO: 3
   Amadora:
     driver_priority:
-      JOÃO: 1
-      BRUNO: 2
-      PAULO: 3
-      CARLOS: 5
+      PAULO: 1
+      JOÃO: 2
+      BRUNO: 3
+      CARLOS: 4
       TONY: 5
   Oeiras:
     driver_priority:
-      BRUNO: 1
-      PAULO: 2
+      PAULO: 1
+      BRUNO: 2
       CARLOS: 3
       JOÃO: 4
       TONY: 5
   Cascais:
     driver_priority:
-      BRUNO: 1
-      PAULO: 2
+      PAULO: 1
+      BRUNO: 2
       CARLOS: 3
       JOÃO: 4
       TONY: 5
   Sintra + Mafra:
     driver_priority:
-      BRUNO: 1
-      PAULO: 2
-      JOÃO: 3
-      CARLOS: 4
+      PAULO: 1
+      BRUNO: 2
+      CARLOS: 3
+      JOÃO: 4
       TONY: 5
   Loures + Odivelas:
     driver_priority:
@@ -211,11 +209,12 @@ distribution_map:
       JOÃO: 1
       BRUNO: 2
       PAULO: 3
+      CARLOS: 4
   Almada/Seixal:
     driver_priority:
       TONY: 1
-      PAULO: 2
-      BRUNO: 3
+      BRUNO: 2
+      PAULO: 3
       JOÃO: 4
   Sesimbra/Setubal/Palmela/Quinta Anjo:
     driver_priority:
